@@ -28,3 +28,6 @@ The console commands are the core's (see its README).
 ## License
 
 MIT. In memory of Terry A. Davis (1969–2018).
+
+YesOS is inspired by his TempleOS (its HolyC became HolyQ here, and the RedSea
+filesystem) and is not affiliated with it.
