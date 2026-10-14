@@ -25,8 +25,15 @@ and fsck is clean.
 
 The console commands are the core's (see its README).
 
-## License
+## Support YesOS
 
+YesOS is developed in the open and funded by donations. They pay for
+development time and for real RISC-V boards, so the missing storage and
+network drivers can be written and tested outside the emulator.
+
+[Donate on Liberapay](https://liberapay.com/yesos-project/donate)
+
+## License
 MIT. In memory of Terry A. Davis (1969–2018).
 
 YesOS is inspired by his TempleOS (its HolyC became HolyQ here, and the RedSea
