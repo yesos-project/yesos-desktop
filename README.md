@@ -10,8 +10,11 @@ windows, audio, apps in PMP cells) will be added here one at a time, each with
 its own tests, to strengthen and organise the code. `yesos-lab` holds the old
 desktop experiments that can be brought over piece by piece.
 
+Requirements (clang, lld, llvm, QEMU, Rust, Python): see the
+[yesos-core README](https://github.com/yesos-project/yesos-core#readme).
+
 ```bash
-git clone --recurse-submodules <url>/yesos-desktop   # or: git submodule update --init
+git clone --recurse-submodules https://github.com/yesos-project/yesos-desktop && cd yesos-desktop
 make prover-setup        # once (Z3, in core/tools/.venv)
 make                     # yesos.elf
 make run                 # serial console in the terminal (Ctrl-A X to quit), own yesos_disk.img
