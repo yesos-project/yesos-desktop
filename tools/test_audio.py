@@ -2,9 +2,10 @@
 """
 Audio test: boots YesOS Desktop with an Intel HD Audio controller whose output
 QEMU records into a WAV file (48 kHz, 16-bit stereo), plays two tones from the
-console and analyses the recording: frequency, duration, level, both channels
-equal, SINAD (signal against noise and distortion) and no underruns. Also
-checks the Pisano counter reported by `audio`.
+console, then test signals through the EML chain (`audio play`: resampler,
+dither, limiter), and analyses the recording: frequency, duration, level,
+both channels equal, SINAD (signal against noise and distortion), limiter
+peak and no underruns. Also checks the Pisano counter reported by `audio`.
 Non-zero exit status on failure.
 """
 import os
@@ -24,7 +25,19 @@ import yesos_harness as harness  # noqa: E402
 
 RATE = 48000
 failures = []
-TONES = [(1000, 1500, 50), (440, 1000, 25)]       # Hz, ms, level %
+# command, Hz, ms, level %, minimum SINAD (dB). The thresholds sit a few dB
+# under what is measured today, to catch regressions.
+TONES = [
+    ("audio tone 1000 1500 50", 1000, 1500, 50, 50),                # Q15 table, no interpolation
+    ("audio tone 440 1000 25", 440, 1000, 25, 50),
+    ("audio play 1000 1000 50", 1000, 1000, 50, 84),                # 48 kHz, TPDF dither
+    ("audio play 1000 1000 50 44100 eml", 1000, 1000, 50, 78),      # EML resampler
+    ("audio play 1000 1000 50 44100 linear", 1000, 1000, 50, 58),   # linear resampler
+    ("audio play 1000 1000 100 48000 limit", 1000, 1000, None, None),
+]
+# Soft limiter: a full-scale peak (32767) goes to thresh + head*d/(head + d).
+LIM_T = 26000
+LIM_PEAK = LIM_T + (32767 - LIM_T) * (32767 - LIM_T) // (2 * (32767 - LIM_T))
 
 
 def check(cond, label):
@@ -118,14 +131,14 @@ def main():
         res = vm.since(m)
         check("Pisano : period 24576 steps (checked at init: OK)" in res, "Pisano period 3*2^13 verified at init")
 
-        for hz, ms, lvl in TONES:
-            m = vm.send(f"audio tone {hz} {ms} {lvl}", 0.5)
-            done = vm.wait_for("[AUDIO] tone done", 20 + ms / 1000, m)
+        for cmd, hz, ms, lvl, _ in TONES:
+            m = vm.send(cmd, 0.5)
+            done = vm.wait_for(" done: ", 20 + ms / 1000, m)
             res = vm.since(m)
-            u = re.search(r"tone done: (\d+) frames, (\d+) underrun", res)
+            u = re.search(r"(?:tone|play) done: (\d+) frames, (\d+) underrun", res)
             check(done and u and int(u.group(1)) == ms * RATE // 1000,
-                  f"tone {hz} Hz: {u.group(1) if u else '?'} frames handed to the DMA")
-            check(u and u.group(2) == "0", f"tone {hz} Hz: no underruns")
+                  f"'{cmd}': {u.group(1) if u else '?'} frames handed to the DMA")
+            check(u and u.group(2) == "0", f"'{cmd}': no underruns")
             time.sleep(0.5)
 
         m = vm.send("audio", 2)
@@ -138,18 +151,29 @@ def main():
 
     x = read_wav(wav)
     check(len(x) > RATE, f"QEMU recorded {len(x) / RATE:.2f} s of audio")
-    check(len(x) > 0 and np.array_equal(x[:, 0], x[:, 1]), "left and right channels are identical")
     segs = segments(x[:, 0]) if len(x) else []
+    # `audio tone` writes the same sample to both channels; the dither of
+    # `audio play` is independent per channel, so there they differ by a few LSB.
+    tone_segs = [(s, e) for (cmd, *_), (s, e) in zip(TONES, segs) if cmd.startswith("audio tone")]
+    check(tone_segs and all(np.array_equal(x[s:e, 0], x[s:e, 1]) for s, e in tone_segs),
+          "audio tone: left and right channels are identical")
+    diff = int(np.abs(x[:, 0].astype(np.int32) - x[:, 1]).max()) if len(x) else -1
+    check(0 <= diff <= 8, f"left and right never differ by more than 8 LSB (max {diff})")
     check(len(segs) == len(TONES), f"{len(segs)} tone(s) found in the recording (expected {len(TONES)})")
-    for (hz, ms, lvl), (s, e) in zip(TONES, segs):
+    for (cmd, hz, ms, lvl, min_sinad), (s, e) in zip(TONES, segs):
         dur = (e - s) * 1000 / RATE
-        check(abs(dur - ms) <= ms * 0.02 + 5, f"{hz} Hz tone lasts {dur:.1f} ms (expected {ms})")
+        check(abs(dur - ms) <= ms * 0.02 + 5, f"'{cmd}' lasts {dur:.1f} ms (expected {ms})")
         mid = x[s + (e - s) // 10: e - (e - s) // 10, 0]
         freq, level, sinad = analyse(mid)
-        want = 20 * np.log10(lvl / 100 / np.sqrt(2))
-        check(abs(freq - hz) < 0.5, f"{hz} Hz tone measured at {freq:.2f} Hz")
-        check(abs(level - want) < 0.5, f"{hz} Hz tone level {level:.2f} dBFS (expected {want:.2f})")
-        check(sinad > 50, f"{hz} Hz tone SINAD {sinad:.1f} dB")
+        check(abs(freq - hz) < 0.5, f"'{cmd}' measured at {freq:.2f} Hz")
+        if lvl is not None:
+            want = 20 * np.log10(lvl / 100 / np.sqrt(2))
+            check(abs(level - want) < 0.5, f"'{cmd}' level {level:.2f} dBFS (expected {want:.2f})")
+        if min_sinad is not None:
+            check(sinad > min_sinad, f"'{cmd}' SINAD {sinad:.1f} dB (more than {min_sinad})")
+        if "limit" in cmd:
+            peak = int(np.abs(mid.astype(np.int32)).max())
+            check(abs(peak - LIM_PEAK) <= 3, f"'{cmd}' peak {peak} (soft-limiter curve gives {LIM_PEAK})")
     shutil.rmtree(tmpdir, ignore_errors=True)
 
     print()

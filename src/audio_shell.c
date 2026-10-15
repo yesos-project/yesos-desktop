@@ -3,6 +3,86 @@
 #include "shell.h"
 #include "kprintf.h"
 #include "memory.h"
+#include "eml_audio.h"
+
+extern const I32 g_sine_q31[1025];
+
+// ---------------------------------------------------------------------------
+// `audio play`: a test signal through the EML chain
+//   sine at the source rate (Q31 table, interpolated) -> 16 bits (a source
+//   file) -> resampler to 48 kHz -> [limiter] -> 16 bits -> HD Audio
+// With a 48 kHz source the resampler is skipped.
+// ---------------------------------------------------------------------------
+typedef enum { RS_EML, RS_LINEAR } RsKind;
+typedef enum { Q_TPDF, Q_SHAPED, Q_ROUND } QKind;
+
+typedef struct {
+    U32 hz, ms, level, rate;
+    RsKind rs;
+    QKind q;
+    Bool limit;
+} PlayCfg;
+
+static struct {
+    PlayCfg c;
+    U64 left;                             // output frames still to produce
+    U32 phase, step;
+    I64 gain_q16;
+    EmlResampler rs;
+    EmlDither src_dither, out_dither;
+    I16 src[2 * HDA_FILL_FRAMES];
+    I32 s32[2 * HDA_FILL_FRAMES];
+} s_play;
+
+static const char* const s_q_name[] = { "TPDF dither", "TPDF dither + noise shaping", "rounding, no dither" };
+
+static I32 sine_s32(U0) {
+    U32 i = s_play.phase >> 22;
+    I64 f = s_play.phase & 0x3FFFFF;
+    I64 v = g_sine_q31[i] + ((((I64)g_sine_q31[i + 1] - g_sine_q31[i]) * f) >> 22);
+    s_play.phase += s_play.step;
+    return (I32)((v * s_play.gain_q16) >> 16);
+}
+
+static I16 quantise(EmlDither* d, I32 s32, U32 ch) {
+    return s_play.c.q == Q_ROUND ? round16(s32) : eml_dither16(d, s32, ch);
+}
+
+static U32 play_fill(I16* out, U32 max, U0* unused) {
+    (U0)unused;
+    if (!s_play.left) return 0;
+    U32 n;
+    if (s_play.c.rate == HDA_RATE) {
+        n = s_play.left < max ? (U32)s_play.left : max;
+        for (U32 i = 0; i < n; i++) s_play.s32[2 * i] = s_play.s32[2 * i + 1] = sine_s32();
+    } else {
+        U32 in_n = (U32)((U64)(max - 2) * s_play.c.rate / HDA_RATE);
+        for (U32 i = 0; i < in_n; i++) {
+            I32 v = sine_s32();
+            s_play.src[2 * i] = quantise(&s_play.src_dither, v, 0);
+            s_play.src[2 * i + 1] = quantise(&s_play.src_dither, v, 1);
+        }
+        n = s_play.c.rs == RS_EML ? eml_resample(&s_play.rs, s_play.src, in_n, s_play.s32)
+                                  : linear_resample(&s_play.rs, s_play.src, in_n, s_play.s32);
+        if (n > s_play.left) n = (U32)s_play.left;
+    }
+    if (s_play.c.limit) eml_limit(s_play.s32, n);
+    for (U32 i = 0; i < 2 * n; i++) out[i] = quantise(&s_play.out_dither, s_play.s32[i], i & 1);
+    s_play.left -= n;
+    return n ? n : 1;                     // never 0 before the end: 0 means finished
+}
+
+static U64 audio_play(const PlayCfg* c) {
+    MemSet(&s_play, 0, sizeof(s_play));
+    s_play.c = *c;
+    s_play.left = (U64)c->ms * HDA_RATE / 1000;
+    s_play.step = (U32)(((U64)c->hz << 32) / c->rate);
+    s_play.gain_q16 = (I64)c->level * 65536 / 100;
+    eml_resampler_init(&s_play.rs, c->rate, HDA_RATE);
+    eml_dither_init(&s_play.src_dither, 0x9E3779B97F4A7C15ULL, c->q == Q_SHAPED);
+    eml_dither_init(&s_play.out_dither, 0, c->q == Q_SHAPED);
+    return hda_play(play_fill, 0);
+}
 
 static U0 audio_status(U0) {
     HdaState* s = hda_state();
@@ -47,8 +127,52 @@ static Bool audio_run(const char* cmd) {
         }
         return TRUE;
     }
+    if (shell_is_prefix("audio play ", cmd)) {
+        PlayCfg c = { 0, 0, 50, HDA_RATE, RS_EML, Q_TPDF, FALSE };
+        U32 num[3], nn = 0;
+        Bool bad = FALSE;
+        for (const char* p = cmd + 11; *p;) {
+            while (*p == ' ') p++;
+            if (!*p) break;
+            const char* w = p;
+            while (*p && *p != ' ') p++;
+            char tok[16];
+            U32 len = (U32)(p - w);
+            if (len >= sizeof(tok)) { bad = TRUE; break; }
+            MemCpy(tok, w, len);
+            tok[len] = 0;
+            if (tok[0] >= '0' && tok[0] <= '9') {
+                U32 v = (U32)shell_parse_uint(tok);
+                if (nn < 3) num[nn++] = v;
+                else c.rate = v;                        // a fourth number: the source rate
+            }
+            else if (StrCmp(tok, "eml") == 0) c.rs = RS_EML;
+            else if (StrCmp(tok, "linear") == 0) c.rs = RS_LINEAR;
+            else if (StrCmp(tok, "tpdf") == 0) c.q = Q_TPDF;
+            else if (StrCmp(tok, "shaped") == 0) c.q = Q_SHAPED;
+            else if (StrCmp(tok, "round") == 0) c.q = Q_ROUND;
+            else if (StrCmp(tok, "limit") == 0) c.limit = TRUE;
+            else bad = TRUE;
+        }
+        if (nn >= 2) { c.hz = num[0]; c.ms = num[1]; }
+        if (nn >= 3) c.level = num[2];
+        if (!hda_state()->ready) {
+            kprintf("audio: no HD Audio output\n");
+        } else if (bad || nn < 2 || c.hz < 20 || c.hz >= c.rate / 2 || c.ms == 0 || c.ms > 60000 ||
+                   c.level > 100 || c.rate < 8000 || c.rate > HDA_RATE) {
+            kprintf("usage: audio play <Hz> <ms> [level %%] [source rate 8000-48000] [eml|linear] [tpdf|shaped|round] [limit]\n");
+        } else {
+            kprintf("[AUDIO] play %u Hz, %u ms, level %u%%: source %u Hz", c.hz, c.ms, c.level, c.rate);
+            if (c.rate != HDA_RATE)
+                kprintf(", %s to 48000 Hz", c.rs == RS_EML ? "EML 8-tap sinc resampler" : "linear interpolation");
+            kprintf(", %s%s\n", c.limit ? "soft limiter, " : "", s_q_name[c.q]);
+            U64 frames = audio_play(&c);
+            kprintf("[AUDIO] play done: %u frames, %u underrun(s)\n", (U32)frames, (U32)hda_state()->underruns);
+        }
+        return TRUE;
+    }
     if (shell_is_prefix("audio", cmd)) {
-        kprintf("usage: audio [status] | audio tone <Hz> <ms> [level %%]\n");
+        kprintf("usage: audio [status] | audio tone <Hz> <ms> [level %%] | audio play ...\n");
         return TRUE;
     }
     return FALSE;
@@ -57,6 +181,7 @@ static Bool audio_run(const char* cmd) {
 static U0 audio_help(U0) {
     kprintf("  Audio\n");
     kprintf("    audio [status]   audio tone <Hz> <ms> [level %%]\n");
+    kprintf("    audio play <Hz> <ms> [level %%] [source rate] [eml|linear] [tpdf|shaped|round] [limit]\n");
 }
 
 static const ShellExtension s_audio_shell = { audio_run, audio_help, NULL, NULL };
