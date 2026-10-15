@@ -98,18 +98,28 @@ def segments(x, thresh=200, min_gap=RATE // 100):
     return out
 
 
+def spectrum(sig):
+    """Power spectrum with a Kaiser window (beta 20): its side lobes sit under
+    -180 dB, so leakage from a tone that falls between bins stays far below
+    16-bit noise. (A Blackman window leaks at about -75 dB here, which once
+    read as a frequency-dependent fault.)"""
+    s = np.asarray(sig, dtype=np.float64)
+    return np.abs(np.fft.rfft(s * np.kaiser(len(s), 20))) ** 2
+
+
+BAND = 12                                        # Kaiser main lobe +- a few bins
+
+
 def analyse(sig):
     """Frequency (Hz), RMS level (dBFS) and SINAD (dB) of a stretch of tone."""
-    s = sig.astype(np.float64)
+    s = np.asarray(sig, dtype=np.float64)
     n = len(s)
-    w = np.blackman(n)
-    spec = np.abs(np.fft.rfft(s * w)) ** 2
+    spec = spectrum(s)
     k = int(np.argmax(spec[1:])) + 1
     # parabolic interpolation of the peak bin for the frequency
     a, b, c = np.log(spec[k - 1] + 1e-30), np.log(spec[k] + 1e-30), np.log(spec[k + 1] + 1e-30)
     freq = (k + 0.5 * (a - c) / (a - 2 * b + c)) * RATE / n
-    band = 8                                     # Blackman main lobe +- a few bins
-    sig_p = spec[max(1, k - band):k + band + 1].sum()
+    sig_p = spec[max(1, k - BAND):k + BAND + 1].sum()
     noise_p = spec[1:].sum() - sig_p
     sinad = 10 * np.log10(sig_p / max(noise_p, 1e-30))
     rms = np.sqrt(np.mean(s ** 2))

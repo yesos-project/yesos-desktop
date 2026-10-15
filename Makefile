@@ -4,7 +4,7 @@
 #   make            build yesos.elf
 #   make run        boot it in QEMU on its own yesos_disk.img, with sound
 #                   (AUDIO=pa by default; AUDIO=pipewire, alsa or none)
-#   make test       run tools/test_desktop.py and tools/test_audio.py
+#   make test       run tools/test_desktop.py, test_audio.py and test_eml.py
 # Exit QEMU: Ctrl-A X
 # =============================================================================
 PRODUCT = desktop
@@ -20,7 +20,7 @@ QEMU_AUDIO = -audiodev $(AUDIO),id=snd0 -device intel-hda,id=hda0 -device hda-ou
 run: $(ELF) yesos_disk.img
 	qemu-system-riscv64 $(QEMU_CPU) $(QEMU_DISK) $(QEMU_AUDIO) -kernel $(ELF) -nographic
 
-TESTS = test_desktop test_audio
+TESTS = test_desktop test_audio test_eml
 test: $(ELF)
 	@fail=0; for t in $(TESTS); do echo "== $$t"; python3 tools/$$t.py || fail=1; done; exit $$fail
 

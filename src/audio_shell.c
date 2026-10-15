@@ -84,6 +84,98 @@ static U64 audio_play(const PlayCfg* c) {
     return hda_play(play_fill, 0);
 }
 
+// ---------------------------------------------------------------------------
+// `audio bench`: retired instructions (minstret) per stereo frame of each
+// stage, on 10 ms blocks (441 frames at 44.1 kHz in, 480 at 48 kHz out).
+// Meaningful only under QEMU -icount, where minstret counts instructions;
+// other harts can add to that count, so each figure is the minimum of
+// several runs with interrupts off. It is an instruction count, not cycles.
+// ---------------------------------------------------------------------------
+#define BENCH_IN    441
+#define BENCH_OUT   482
+#define BENCH_RUNS  9
+
+static I16 s_bsrc[2 * BENCH_IN];
+static I32 s_bs32[2 * BENCH_OUT];
+static I32 s_blim[2 * BENCH_OUT];
+static I16 s_bout[2 * BENCH_OUT];
+
+static inline U64 instret(U0) {
+    U64 v;
+    __asm__ __volatile__("csrr %0, minstret" : "=r"(v));
+    return v;
+}
+
+typedef enum { B_CAL, B_SINE, B_EML, B_LINEAR, B_TPDF, B_ROUND, B_LIMIT } BenchOp;
+static const char* const s_bench_name[] = {
+    "calibration loop of 2 instructions",
+    "sine source (Q31 table, interpolated)",
+    "EML resampler 44.1 -> 48 kHz",
+    "linear resampler 44.1 -> 48 kHz",
+    "TPDF dither to 16 bits",
+    "rounding to 16 bits",
+    "soft limiter (full-scale sine)",
+};
+
+// Runs one block of `op`; returns the frames it produced.
+static U32 bench_once(BenchOp op, EmlResampler* rs, EmlDither* d) {
+    switch (op) {
+    case B_CAL: {
+        U64 k = 480;
+        __asm__ __volatile__("1: addi %0, %0, -1\n bnez %0, 1b" : "+r"(k));
+        return 480;
+    }
+    case B_SINE:
+        for (U32 i = 0; i < BENCH_IN; i++) s_bs32[2 * i] = s_bs32[2 * i + 1] = sine_s32();
+        return BENCH_IN;
+    case B_EML:    return eml_resample(rs, s_bsrc, BENCH_IN, s_bs32);
+    case B_LINEAR: return linear_resample(rs, s_bsrc, BENCH_IN, s_bs32);
+    case B_TPDF:
+        for (U32 i = 0; i < 2 * 480; i++) s_bout[i] = eml_dither16(d, s_bs32[i], i & 1);
+        return 480;
+    case B_ROUND:
+        for (U32 i = 0; i < 2 * 480; i++) s_bout[i] = round16(s_bs32[i]);
+        return 480;
+    case B_LIMIT:
+        MemCpy(s_bs32, s_blim, sizeof(s_bs32));
+        eml_limit(s_bs32, 480);
+        return 480;
+    }
+    return 0;
+}
+
+static U0 audio_bench(U0) {
+    MemSet(&s_play, 0, sizeof(s_play));
+    s_play.step = (U32)(((U64)1000 << 32) / 44100);
+    s_play.gain_q16 = 65536;                            // full scale, for the limiter
+    for (U32 i = 0; i < 480; i++) s_blim[2 * i] = s_blim[2 * i + 1] = sine_s32();
+    s_play.gain_q16 = 32768;
+    EmlDither d;
+    eml_dither_init(&d, 0, FALSE);
+    for (U32 i = 0; i < BENCH_IN; i++) s_bsrc[2 * i] = s_bsrc[2 * i + 1] = eml_dither16(&d, sine_s32(), 0);
+    kprintf("[AUDIO] bench: retired instructions per stereo frame (min of %u runs of 10 ms)\n", BENCH_RUNS);
+    for (U32 op = B_CAL; op <= B_LIMIT; op++) {
+        EmlResampler rs;
+        eml_resampler_init(&rs, 44100, HDA_RATE);
+        bench_once((BenchOp)op, &rs, &d);              // warm up: caches, resampler history
+        U64 best = ~0ULL, worst = 0;
+        U32 frames = 1;
+        for (U32 r = 0; r < BENCH_RUNS; r++) {
+            __asm__ __volatile__("csrc mstatus, %0" : : "r"(1ULL << 3));
+            U64 t0 = instret();
+            U32 n = bench_once((BenchOp)op, &rs, &d);
+            U64 t1 = instret();
+            __asm__ __volatile__("csrs mstatus, %0" : : "r"(1ULL << 3));
+            U64 per = (t1 - t0) * 100 / (n ? n : 1);
+            if (per < best) { best = per; frames = n; }
+            if (per > worst) worst = per;
+        }
+        kprintf("[AUDIO] bench %s: %u.%02u instr/frame (max %u.%02u, %u frames)\n", s_bench_name[op],
+                (U32)(best / 100), (U32)(best % 100), (U32)(worst / 100), (U32)(worst % 100), frames);
+    }
+    kprintf("[AUDIO] bench done\n");
+}
+
 static U0 audio_status(U0) {
     HdaState* s = hda_state();
     if (!s->present) {
@@ -125,6 +217,10 @@ static Bool audio_run(const char* cmd) {
             U32 frames = hda_tone(hz, ms, level);
             kprintf("[AUDIO] tone done: %u frames, %u underrun(s)\n", frames, (U32)hda_state()->underruns);
         }
+        return TRUE;
+    }
+    if (StrCmp(cmd, "audio bench") == 0) {
+        audio_bench();
         return TRUE;
     }
     if (shell_is_prefix("audio play ", cmd)) {
@@ -172,7 +268,7 @@ static Bool audio_run(const char* cmd) {
         return TRUE;
     }
     if (shell_is_prefix("audio", cmd)) {
-        kprintf("usage: audio [status] | audio tone <Hz> <ms> [level %%] | audio play ...\n");
+        kprintf("usage: audio [status] | audio tone <Hz> <ms> [level %%] | audio play ... | audio bench\n");
         return TRUE;
     }
     return FALSE;
@@ -182,6 +278,7 @@ static U0 audio_help(U0) {
     kprintf("  Audio\n");
     kprintf("    audio [status]   audio tone <Hz> <ms> [level %%]\n");
     kprintf("    audio play <Hz> <ms> [level %%] [source rate] [eml|linear] [tpdf|shaped|round] [limit]\n");
+    kprintf("    audio bench      instructions per frame of each stage (run QEMU with -icount)\n");
 }
 
 static const ShellExtension s_audio_shell = { audio_run, audio_help, NULL, NULL };
