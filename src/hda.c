@@ -55,10 +55,11 @@
 #define PAR_WIDGET_CAPS     0x09
 #define PAR_PIN_CAPS        0x0C
 #define PAR_OUT_AMP_CAPS    0x12
+#define PAR_PCM             0x0A    // supported PCM sizes (bits 20:16) and rates (bits 11:0)
 #define WIDGET_OUTPUT       0x0
 #define WCAP_OUT_AMP        (1U << 2)   // widget has an output amplifier
 #define WIDGET_PIN          0x4
-#define FMT_48K_16BIT_STEREO 0x0011
+#define FMT_16BIT_STEREO    0x0011  // bits 6:4 = 16-bit, bits 3:0 = channels - 1
 #define AMP_OUT_LR          0xB000  // output amp, left and right, unmuted
 
 #define RING_MASK     (HDA_RING_FRAMES - 1)
@@ -116,6 +117,44 @@ static U32 param(U8 nid, U8 id) {
     return verb12(nid, VERB_GET_PARAM, id);
 }
 
+// Sample rates an HDA stream format can express (spec 3.7.1): base 48 or
+// 44.1 kHz (bit 14), multiplier (bits 13:11) and divisor (bits 10:8). `cap`
+// is the matching bit of the codec's supported-rates parameter.
+static const struct { U32 hz; U16 fmt; U8 cap; } s_rates[] = {
+    {   8000, (0 << 14) | (0 << 11) | (5 << 8),  0 },   // 48 / 6
+    {  11025, (1 << 14) | (0 << 11) | (3 << 8),  1 },   // 44.1 / 4
+    {  16000, (0 << 14) | (0 << 11) | (2 << 8),  2 },   // 48 / 3
+    {  22050, (1 << 14) | (0 << 11) | (1 << 8),  3 },   // 44.1 / 2
+    {  32000, (0 << 14) | (1 << 11) | (2 << 8),  4 },   // 48 * 2 / 3
+    {  44100, (1 << 14),                         5 },
+    {  48000, 0,                                 6 },
+    {  88200, (1 << 14) | (1 << 11),             7 },   // 44.1 * 2
+    {  96000, (0 << 14) | (1 << 11),             8 },   // 48 * 2
+    { 176400, (1 << 14) | (3 << 11),             9 },   // 44.1 * 4
+    { 192000, (0 << 14) | (3 << 11),            10 },   // 48 * 4
+};
+
+static I32 rate_index(U32 hz) {
+    for (U32 i = 0; i < sizeof(s_rates) / sizeof(s_rates[0]); i++)
+        if (s_rates[i].hz == hz) return (I32)i;
+    return -1;
+}
+
+Bool hda_rate_supported(U32 hz) {
+    I32 i = rate_index(hz);
+    return i >= 0 && (g.pcm_rates & (1U << s_rates[i].cap));
+}
+
+Bool hda_set_rate(U32 hz) {
+    if (g.playing || !hda_rate_supported(hz)) return FALSE;
+    g.rate = hz;
+    return TRUE;
+}
+
+static U16 stream_format(U0) {
+    return (U16)(s_rates[rate_index(g.rate)].fmt | FMT_16BIT_STEREO);
+}
+
 // Find the first audio function group, its first output converter (DAC) and
 // its first output-capable pin.
 static Bool discover_codec(U0) {
@@ -143,6 +182,11 @@ static Bool discover_codec(U0) {
     U32 amp = param(g.dac, PAR_OUT_AMP_CAPS);
     if (!amp) amp = param(afg, PAR_OUT_AMP_CAPS);      // default amp caps of the group
     g.amp_0db = (U8)(amp & 0x7F);                       // "offset": the step that is 0 dB
+    U32 pcm = param(g.dac, PAR_PCM);
+    if (!pcm) pcm = param(afg, PAR_PCM);                // default formats of the group
+    g.pcm_rates = pcm & 0xFFF;
+    if (!(pcm & (1U << 17))) g.pcm_rates = 0;           // no 16-bit support: no usable rate
+    g.rate = HDA_RATE;
     return TRUE;
 }
 
@@ -245,9 +289,9 @@ Bool hda_prepare(U0) {
         return FALSE;
     }
 
-    // Codec path: DAC on stream 1 channel 0, 48 kHz 16-bit stereo, 0 dB; pin out.
+    // Codec path: DAC on stream 1 channel 0, 16-bit stereo at g.rate, 0 dB; pin out.
     verb12(g.dac, VERB_SET_POWER, 0x00);
-    verb4(g.dac, VERB4_SET_FORMAT, FMT_48K_16BIT_STEREO);
+    verb4(g.dac, VERB4_SET_FORMAT, stream_format());
     verb12(g.dac, VERB_SET_STREAM_CH, (STREAM_TAG << 4) | 0);
     verb4(g.dac, VERB4_SET_AMP, AMP_OUT_LR | g.amp_0db);
     verb12(g.pin, VERB_SET_POWER, 0x00);
@@ -271,7 +315,7 @@ Bool hda_prepare(U0) {
     mmio_write32(s_sd + SD_BDPU, (U32)(bdl >> 32));
     mmio_write32(s_sd + SD_CBL, RING_BYTES);
     mmio_write16(s_sd + SD_LVI, BDL_ENTRIES - 1);
-    mmio_write16(s_sd + SD_FMT, FMT_48K_16BIT_STEREO);
+    mmio_write16(s_sd + SD_FMT, stream_format());
     mmio_write8(s_sd + SD_STS, SD_STS_CLEAR);
 
     g.frames_written = 0;
@@ -334,25 +378,12 @@ U0 hda_stop(U0) {
 
 // ---- tone generator (phase accumulator, Q15 sine table) --------------------------
 
-U32 hda_tone(U32 hz, U32 ms, U32 level_pct) {
-    if (!g.ready || hz == 0 || hz >= HDA_RATE / 2) return 0;
-    if (level_pct > 100) level_pct = 100;
-    if (!hda_prepare()) return 0;
-
-    U64 total = (U64)ms * HDA_RATE / 1000;
-    U32 step = (U32)(((U64)hz << 32) / HDA_RATE);       // phase increment per frame
-    U32 phase = 0;
-    I32 amp = (I32)(32767 * level_pct / 100);
-    I16 block[2 * 256];
-    U64 done = 0;
-    while (done < total) {
-        U32 n = (total - done) < 256 ? (U32)(total - done) : 256;
-        for (U32 i = 0; i < n; i++) {
-            I16 s = (I16)((g_sine_q15[phase >> 22] * amp) >> 15);
-            block[2 * i] = s;
-            block[2 * i + 1] = s;
-            phase += step;
-        }
+U64 hda_play(HdaFill fill, U0* ctx) {
+    if (!g.ready || !fill || !hda_prepare()) return 0;
+    I16 block[2 * HDA_FILL_FRAMES];
+    U64 total = 0;
+    U32 n;
+    while ((n = fill(block, HDA_FILL_FRAMES, ctx)) != 0) {
         U32 off = 0;
         while (off < n) {
             U32 w = hda_write(block + 2 * off, n - off);
@@ -362,17 +393,47 @@ U32 hda_tone(U32 hz, U32 ms, U32 level_pct) {
                 SleepMS(2);
             }
         }
-        done += n;
+        total += n;
     }
-    hda_run();                                          // short tones fit in the ring
-    // Drain: keep the ring full of silence until the whole tone has gone out,
+    hda_run();                                          // short sounds fit in the ring
+    // Drain: keep the ring full of silence until everything has gone out,
     // so the DMA never wraps onto old samples, then stop.
-    U64 tone_end = g.frames_written;
+    U64 end = g.frames_written;
     MemSet(block, 0, sizeof(block));
-    U64 deadline = timer_get_uptime_ms() + 2000 + (U64)ms;
-    while (g.frames_played < tone_end + 2048 && timer_get_uptime_ms() < deadline) {
-        if (!hda_write(block, 256)) SleepMS(2);
+    U64 deadline = timer_get_uptime_ms() + 2000 + total * 1000 / g.rate;
+    while (g.frames_played < end + 2048 && timer_get_uptime_ms() < deadline) {
+        if (!hda_write(block, HDA_FILL_FRAMES)) SleepMS(2);
     }
     hda_stop();
-    return (U32)total;
+    return total;
+}
+
+typedef struct {
+    U64 left;
+    U32 phase, step;
+    I32 amp;
+} ToneCtx;
+
+static U32 tone_fill(I16* stereo, U32 max, U0* p) {
+    ToneCtx* t = (ToneCtx*)p;
+    U32 n = t->left < max ? (U32)t->left : max;
+    for (U32 i = 0; i < n; i++) {
+        I16 s = (I16)((g_sine_q15[t->phase >> 22] * t->amp) >> 15);
+        stereo[2 * i] = s;
+        stereo[2 * i + 1] = s;
+        t->phase += t->step;
+    }
+    t->left -= n;
+    return n;
+}
+
+U32 hda_tone(U32 hz, U32 ms, U32 level_pct) {
+    if (!g.ready || hz == 0 || hz >= HDA_RATE / 2 || !hda_set_rate(HDA_RATE)) return 0;
+    if (level_pct > 100) level_pct = 100;
+    ToneCtx t;
+    t.left = (U64)ms * HDA_RATE / 1000;
+    t.step = (U32)(((U64)hz << 32) / HDA_RATE);         // phase increment per frame
+    t.phase = 0;
+    t.amp = (I32)(32767 * level_pct / 100);
+    return (U32)hda_play(tone_fill, &t);
 }

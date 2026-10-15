@@ -4,10 +4,10 @@
 #include "types.h"
 
 // Intel High Definition Audio output (QEMU `intel-hda` + `hda-output`).
-// One output stream: 48 kHz, 16-bit stereo, a power-of-two DMA ring walked
-// linearly. Integer arithmetic only.
+// One output stream: 16-bit stereo at a rate the codec supports (48 kHz by
+// default), a power-of-two DMA ring walked linearly. Integer arithmetic only.
 
-#define HDA_RATE            48000
+#define HDA_RATE            48000                       // default rate, used by tones
 #define HDA_RING_LOG2       14                          // 16384 frames, ~341 ms
 #define HDA_RING_FRAMES     (1U << HDA_RING_LOG2)
 #define HDA_FRAME_BYTES     4                           // 16-bit stereo
@@ -22,6 +22,8 @@ typedef struct {
     U8        amp_0db;                  // DAC output amp step for 0 dB
     Bool      pin_has_amp;
     U8        num_iss, num_oss;
+    U32       rate;                     // current stream rate, Hz
+    U32       pcm_rates;                // codec's supported-rate bits (HDA spec 7.3.4.7)
     U64       frames_written, frames_played, underruns;
     U32       last_lpib;
     // Pisano counter: steps the Fibonacci recurrence modulo the ring size on
@@ -40,9 +42,18 @@ U32       hda_write(const I16* stereo, U32 frames);   // frames accepted (ring s
 U0        hda_pump(U0);                 // follow the DMA position, count underruns
 U0        hda_stop(U0);
 U32       hda_queued_frames(U0);        // written but not yet played
+Bool      hda_rate_supported(U32 hz);
+Bool      hda_set_rate(U32 hz);         // while stopped; FALSE if the codec cannot
 
-// Play a sine tone: frequency in Hz, duration in ms, level in percent of
-// full scale. Blocks until it has been played. Returns frames played.
+// Stream sound produced on the fly at the current rate: `fill` writes up to
+// `max` stereo frames and returns how many (0 = finished). Blocks until
+// everything has been played. Returns the number of frames played.
+#define HDA_FILL_FRAMES     512
+typedef U32 (*HdaFill)(I16* stereo, U32 max, U0* ctx);
+U64       hda_play(HdaFill fill, U0* ctx);
+
+// Play a sine tone at 48 kHz: frequency in Hz, duration in ms, level in
+// percent of full scale. Blocks until it has been played. Returns frames played.
 U32       hda_tone(U32 hz, U32 ms, U32 level_pct);
 
 U0        audio_shell_register(U0);
