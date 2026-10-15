@@ -1,9 +1,10 @@
 # =============================================================================
-# YesOS Desktop - for now the YesOS core and its serial console (the core is
-# the `core` submodule). Features are added one at a time.
+# YesOS Desktop - the YesOS core, its serial console and, one feature at a
+# time, the desktop (today: HD Audio output). The core is the `core` submodule.
 #   make            build yesos.elf
-#   make run        boot it in QEMU on its own yesos_disk.img
-#   make test       run tools/test_desktop.py
+#   make run        boot it in QEMU on its own yesos_disk.img, with sound
+#                   (AUDIO=pa by default; AUDIO=pipewire, alsa or none)
+#   make test       run tools/test_desktop.py and tools/test_audio.py
 # Exit QEMU: Ctrl-A X
 # =============================================================================
 PRODUCT = desktop
@@ -13,10 +14,14 @@ DISK_MB = 64
 
 include core/core.mk
 
-run: $(ELF) yesos_disk.img
-	qemu-system-riscv64 $(QEMU_CPU) $(QEMU_DISK) -kernel $(ELF) -nographic
+AUDIO ?= pa
+QEMU_AUDIO = -audiodev $(AUDIO),id=snd0 -device intel-hda,id=hda0 -device hda-output,bus=hda0.0,audiodev=snd0
 
+run: $(ELF) yesos_disk.img
+	qemu-system-riscv64 $(QEMU_CPU) $(QEMU_DISK) $(QEMU_AUDIO) -kernel $(ELF) -nographic
+
+TESTS = test_desktop test_audio
 test: $(ELF)
-	python3 tools/test_desktop.py
+	@fail=0; for t in $(TESTS); do echo "== $$t"; python3 tools/$$t.py || fail=1; done; exit $$fail
 
 .PHONY: run test
