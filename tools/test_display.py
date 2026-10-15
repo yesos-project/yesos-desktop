@@ -18,6 +18,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "core", "tools"))
 import yesos_harness as harness  # noqa: E402
+import gen_font  # noqa: E402
 
 failures = []
 
@@ -107,6 +108,26 @@ def test_pattern(w, h):
     return img
 
 
+FONT = gen_font.load()
+
+
+def draw_text(img, x, y, text, color):
+    """Same as display_text() with a transparent background (core font)."""
+    cx = x
+    for ch in text:
+        cp = ord(ch)
+        g = FONT.get(cp) if cp <= 0xFF else None
+        if cp != 0x20 and (g is None or not any(g)):
+            g = FONT[ord("?")]
+        for r in range(16):
+            for c in range(8):
+                px, py = cx + c, y + r
+                if g[r] & (0x80 >> c) and px < img.shape[1] and py < img.shape[0]:
+                    img[py, px] = rgb(color)
+        cx += 8
+    return cx
+
+
 def compare(got, want, label):
     if got.shape != want.shape:
         check(False, f"{label}: screenshot is {got.shape[1]}x{got.shape[0]}, expected {want.shape[1]}x{want.shape[0]}")
@@ -141,6 +162,20 @@ def main():
             check(f"mode {w}x{h}" in vm.since(m), f"mode {w}x{h} set")
             vm.send("display test", 3)
             compare(vm.screendump(shot), test_pattern(w, h), f"test pattern at {w}x{h}")
+
+        # text, in the 1280x720 mode left by the loop above
+        vm.send("display clear 000000", 2)
+        want = np.zeros((720, 1280, 3), np.uint8)
+        lines = [(8, 8, 0xFFFFFF, "¿Año nuevo? ¡Sí! Él comió ñandú en Señorío."),
+                 (8, 40, 0xFFCC00, "ÁÉÍÓÚ áéíóú ñÑ üÜ 25° «hola» gjpqy_;"),
+                 (8, 72, 0x00FF00, "Unknown glyph: € (drawn as '?')"),
+                 (1256, 120, 0xFF00FF, "clipped at the right edge")]
+        for x, y, c, text in lines:
+            m = vm.send(f"display print {x} {y} {c:06x} {text}", 2)
+            ok = f"text at {x},{y}, ends at x={x + 8 * len(text)}" in vm.since(m)
+            check(ok, f"display print at {x},{y}: {len(text)} characters")
+            draw_text(want, x, y, text, c)
+        compare(vm.screendump(shot), want, "Spanish text, colours, a missing glyph and clipping")
 
         m = vm.send("display mode 9000 9000", 3)
         check("mode 9000x9000 refused" in vm.since(m), "an impossible mode is refused")

@@ -85,6 +85,11 @@ def main():
             check(not answered, "nothing answers on the network")
             console(vm, "disk save notes.txt hello-from-the-desktop", 3)
             check("hello-from-the-desktop" in console(vm, "disk cat notes.txt", 2), "a file written from the console reads back")
+            console(vm, "disk save notas.txt ¿Qué tal? Mañana, señor.", 3)
+            check("¿Qué tal? Mañana, señor." in console(vm, "disk cat notas.txt", 2),
+                  "UTF-8 text typed at the console is stored and read back")
+            check("¿Qué tal?" in console(vm, "disk cat notas.txtñ\x7f", 2),
+                  "backspace removes a whole UTF-8 character (ñ is two bytes)")
             check("CLEAN" in console(vm, "fsck", 6), "fsck clean")
             check("FATAL" not in vm.output() and "EXCEPTION" not in vm.output(), "no kernel faults")
         finally:

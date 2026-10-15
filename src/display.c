@@ -10,6 +10,7 @@
 #include "kprintf.h"
 #include "memory.h"
 #include "shell.h"
+#include "font.h"
 
 #define BOCHS_VENDOR        0x1234
 #define BOCHS_DEVICE        0x1111
@@ -123,6 +124,36 @@ U0 display_test_pattern(U0) {
     display_fill(w - 1, 0, 1, h, 0xFF0000);
 }
 
+// ---- text ----------------------------------------------------------------------
+
+static U0 draw_glyph(U32 x, U32 y, U32 cp, U32 fg, U32 bg, Bool opaque) {
+    const U8* rows = font_glyph(cp);
+    for (U32 r = 0; r < FONT_HEIGHT && y + r < g.height; r++) {
+        U32* px = g.fb + (U64)(y + r) * g.pitch + x;
+        U8 bits = rows[r];
+        for (U32 c = 0; c < FONT_WIDTH && x + c < g.width; c++) {
+            if (bits & (0x80 >> c)) px[c] = fg;
+            else if (opaque) px[c] = bg;
+        }
+    }
+}
+
+U32 display_text(U32 x, U32 y, const char* s, U32 fg, U32 bg, Bool opaque) {
+    if (!g.ready || !s) return x;
+    U32 cx = x;
+    while (*s) {
+        U32 cp = font_utf8_next(&s);
+        if (cp == '\n') {
+            cx = x;
+            y += FONT_HEIGHT;
+            continue;
+        }
+        if (cx < g.width && y < g.height) draw_glyph(cx, y, cp, fg, bg, opaque);
+        cx += FONT_WIDTH;
+    }
+    return cx;
+}
+
 // ---- console: `display` ----------------------------------------------------------
 
 static const char* next_word(const char* p) {
@@ -166,6 +197,17 @@ static Bool display_run(const char* cmd) {
         U32 rgb = *p ? (U32)parse_hex(p) & 0xFFFFFF : 0;
         display_fill(0, 0, g.width, g.height, rgb);
         kprintf("[DISPLAY] cleared to %06x\n", rgb);
+    } else if (shell_is_prefix("display print ", cmd)) {
+        // display print <x> <y> <rrggbb> <text>   (transparent background)
+        const char* p = cmd + 14;
+        U32 x = (U32)shell_parse_uint(p);
+        p = next_word(p);
+        U32 y = (U32)shell_parse_uint(p);
+        p = next_word(p);
+        U32 fg = (U32)parse_hex(p) & 0xFFFFFF;
+        p = next_word(p);
+        U32 end = display_text(x, y, p, fg, 0, FALSE);
+        kprintf("[DISPLAY] text at %u,%u, ends at x=%u\n", x, y, end);
     } else if (shell_is_prefix("display mode ", cmd)) {
         const char* p = cmd + 13;
         U32 w = (U32)shell_parse_uint(p);
@@ -179,7 +221,8 @@ static Bool display_run(const char* cmd) {
             display_set_mode(DISPLAY_DEFAULT_W, DISPLAY_DEFAULT_H);
         }
     } else {
-        kprintf("usage: display [status] | display test | display clear [rrggbb] | display mode <w> <h>\n");
+        kprintf("usage: display [status] | display test | display clear [rrggbb] | display mode <w> <h>\n"
+                "       display print <x> <y> <rrggbb> <text>\n");
     }
     return TRUE;
 }
@@ -187,6 +230,7 @@ static Bool display_run(const char* cmd) {
 static U0 display_help(U0) {
     kprintf("  Display\n");
     kprintf("    display [status]   display test   display clear [rrggbb]   display mode <w> <h>\n");
+    kprintf("    display print <x> <y> <rrggbb> <text>\n");
 }
 
 static const ShellExtension s_display_shell = { display_run, display_help, NULL, NULL };

@@ -24,6 +24,13 @@ DisplayState* display_state(U0);
 Bool          display_set_mode(U32 w, U32 h);  // 32 bpp; FALSE if not possible
 U0            display_fill(U32 x, U32 y, U32 w, U32 h, U32 rgb);   // clipped
 U0            display_test_pattern(U0);
+
+// Text in the core's YesOS 8x16 font (font.h):
+// UTF-8 up to U+00FF (printable ASCII and Latin-1 for Spanish); anything the
+// font lacks is drawn as '?'. '\n' starts a new line at x. With `opaque`
+// the cell background is painted `bg`, else left as it is. Clipped to the
+// screen. Returns the x after the last character of the last line.
+U32           display_text(U32 x, U32 y, const char* utf8, U32 fg, U32 bg, Bool opaque);
 U0            display_shell_register(U0);
 
 #endif // DISPLAY_H
