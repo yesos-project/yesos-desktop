@@ -1,14 +1,19 @@
 # YesOS Desktop (RISC-V)
 
 The desktop product of YesOS, built on the YesOS core (the `core` git
-submodule): Machine mode only, a locked Z3-proven PMP, no Linux, libc or binary
-blobs.
+submodule): Machine mode only, a locked Z3-proven PMP, an integer-only kernel
+(no floating point, checked at every build), no Linux, libc or binary blobs.
 
 For now it is **the core and its serial console, nothing else**: no network
-services and no optional modules (259 KB of code). Features (display, input,
+services and no optional modules (246 KiB of code). Features (display, input,
 windows, audio, apps in PMP cells) will be added here one at a time, each with
 its own tests, to strengthen and organise the code. `yesos-lab` holds the old
-desktop experiments that can be brought over piece by piece.
+desktop experiments that can be brought over piece by piece. Next: audio, with
+the EML signal processing (resampling, dithering, limiter) and the Pisano
+counter from the lab, and tests that measure its quality and cost.
+
+Design choices, a comparison with Linux, seL4, Zephyr and TempleOS, and what is
+measured today: see the [yesos-core README](https://github.com/yesos-project/yesos-core#2-design-choices).
 
 Requirements (clang, lld, llvm, QEMU, Rust, Python): see the
 [yesos-core README](https://github.com/yesos-project/yesos-core#readme).
