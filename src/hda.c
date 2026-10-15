@@ -334,12 +334,25 @@ U0 hda_stop(U0) {
 
 // ---- tone generator (phase accumulator, Q15 sine table) --------------------------
 
-U64 hda_play(HdaFill fill, U0* ctx) {
-    if (!g.ready || !fill || !hda_prepare()) return 0;
-    I16 block[2 * HDA_FILL_FRAMES];
-    U64 total = 0;
-    U32 n;
-    while ((n = fill(block, HDA_FILL_FRAMES, ctx)) != 0) {
+U32 hda_tone(U32 hz, U32 ms, U32 level_pct) {
+    if (!g.ready || hz == 0 || hz >= HDA_RATE / 2) return 0;
+    if (level_pct > 100) level_pct = 100;
+    if (!hda_prepare()) return 0;
+
+    U64 total = (U64)ms * HDA_RATE / 1000;
+    U32 step = (U32)(((U64)hz << 32) / HDA_RATE);       // phase increment per frame
+    U32 phase = 0;
+    I32 amp = (I32)(32767 * level_pct / 100);
+    I16 block[2 * 256];
+    U64 done = 0;
+    while (done < total) {
+        U32 n = (total - done) < 256 ? (U32)(total - done) : 256;
+        for (U32 i = 0; i < n; i++) {
+            I16 s = (I16)((g_sine_q15[phase >> 22] * amp) >> 15);
+            block[2 * i] = s;
+            block[2 * i + 1] = s;
+            phase += step;
+        }
         U32 off = 0;
         while (off < n) {
             U32 w = hda_write(block + 2 * off, n - off);
@@ -349,47 +362,17 @@ U64 hda_play(HdaFill fill, U0* ctx) {
                 SleepMS(2);
             }
         }
-        total += n;
+        done += n;
     }
-    hda_run();                                          // short sounds fit in the ring
-    // Drain: keep the ring full of silence until everything has gone out,
+    hda_run();                                          // short tones fit in the ring
+    // Drain: keep the ring full of silence until the whole tone has gone out,
     // so the DMA never wraps onto old samples, then stop.
-    U64 end = g.frames_written;
+    U64 tone_end = g.frames_written;
     MemSet(block, 0, sizeof(block));
-    U64 deadline = timer_get_uptime_ms() + 2000 + total * 1000 / HDA_RATE;
-    while (g.frames_played < end + 2048 && timer_get_uptime_ms() < deadline) {
-        if (!hda_write(block, HDA_FILL_FRAMES)) SleepMS(2);
+    U64 deadline = timer_get_uptime_ms() + 2000 + (U64)ms;
+    while (g.frames_played < tone_end + 2048 && timer_get_uptime_ms() < deadline) {
+        if (!hda_write(block, 256)) SleepMS(2);
     }
     hda_stop();
-    return total;
-}
-
-typedef struct {
-    U64 left;
-    U32 phase, step;
-    I32 amp;
-} ToneCtx;
-
-static U32 tone_fill(I16* stereo, U32 max, U0* p) {
-    ToneCtx* t = (ToneCtx*)p;
-    U32 n = t->left < max ? (U32)t->left : max;
-    for (U32 i = 0; i < n; i++) {
-        I16 s = (I16)((g_sine_q15[t->phase >> 22] * t->amp) >> 15);
-        stereo[2 * i] = s;
-        stereo[2 * i + 1] = s;
-        t->phase += t->step;
-    }
-    t->left -= n;
-    return n;
-}
-
-U32 hda_tone(U32 hz, U32 ms, U32 level_pct) {
-    if (!g.ready || hz == 0 || hz >= HDA_RATE / 2) return 0;
-    if (level_pct > 100) level_pct = 100;
-    ToneCtx t;
-    t.left = (U64)ms * HDA_RATE / 1000;
-    t.step = (U32)(((U64)hz << 32) / HDA_RATE);         // phase increment per frame
-    t.phase = 0;
-    t.amp = (I32)(32767 * level_pct / 100);
-    return (U32)hda_play(tone_fill, &t);
+    return (U32)total;
 }

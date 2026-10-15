@@ -41,15 +41,8 @@ U0        hda_pump(U0);                 // follow the DMA position, count underr
 U0        hda_stop(U0);
 U32       hda_queued_frames(U0);        // written but not yet played
 
-// Stream sound produced on the fly: `fill` writes up to `max` stereo frames
-// and returns how many (0 = finished). Blocks until everything has been
-// played. Returns the number of frames played.
-#define HDA_FILL_FRAMES     512
-typedef U32 (*HdaFill)(I16* stereo, U32 max, U0* ctx);
-U64       hda_play(HdaFill fill, U0* ctx);
-
 // Play a sine tone: frequency in Hz, duration in ms, level in percent of
-// full scale, read from a 1024-point Q15 table without interpolation. Blocks until it has been played. Returns frames played.
+// full scale. Blocks until it has been played. Returns frames played.
 U32       hda_tone(U32 hz, U32 ms, U32 level_pct);
 
 U0        audio_shell_register(U0);
