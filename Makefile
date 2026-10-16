@@ -15,7 +15,7 @@
 # Exit QEMU: Ctrl-A X
 # =============================================================================
 PRODUCT = desktop
-CORE_MODULES =
+CORE_MODULES = gfx lineedit
 PRODUCT_C_SRCS = $(wildcard src/*.c)
 DISK_MB = 64
 
