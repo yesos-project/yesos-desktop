@@ -34,6 +34,75 @@
 static DisplayState g;
 static uintptr_t s_dispi;
 
+// ---- pointer ---------------------------------------------------------------------
+// 'X' black outline, '.' white fill, ' ' transparent. tools/test_display.py
+// and test_input.py draw the same arrow.
+static const char* const s_arrow[DISPLAY_POINTER_H] = {
+    "X          ",
+    "XX         ",
+    "X.X        ",
+    "X..X       ",
+    "X...X      ",
+    "X....X     ",
+    "X.....X    ",
+    "X......X   ",
+    "X.......X  ",
+    "X........X ",
+    "X.....XXXXX",
+    "X..X..X    ",
+    "X.X X..X   ",
+    "XX  X..X   ",
+    "X    X..X  ",
+    "     X..X  ",
+    "      X..X ",
+    "      X..X ",
+    "       XX  ",
+};
+static U32  s_under[DISPLAY_POINTER_H][DISPLAY_POINTER_W];
+static I32  s_ptr_x, s_ptr_y;
+static Bool s_ptr_visible, s_ptr_drawn;
+static U32  s_draw_depth;
+
+static U0 pointer_erase(U0) {
+    if (!s_ptr_drawn) return;
+    for (I32 r = 0; r < DISPLAY_POINTER_H; r++)
+        for (I32 c = 0; c < DISPLAY_POINTER_W; c++) {
+            I32 x = s_ptr_x + c, y = s_ptr_y + r;
+            if (s_arrow[r][c] != ' ' && x >= 0 && y >= 0 && x < (I32)g.width && y < (I32)g.height)
+                g.fb[(U64)y * g.pitch + x] = s_under[r][c];
+        }
+    s_ptr_drawn = FALSE;
+}
+
+static U0 pointer_paint(U0) {
+    if (!s_ptr_visible || !g.ready || s_ptr_drawn) return;
+    for (I32 r = 0; r < DISPLAY_POINTER_H; r++)
+        for (I32 c = 0; c < DISPLAY_POINTER_W; c++) {
+            I32 x = s_ptr_x + c, y = s_ptr_y + r;
+            if (s_arrow[r][c] == ' ' || x < 0 || y < 0 || x >= (I32)g.width || y >= (I32)g.height) continue;
+            U32* px = &g.fb[(U64)y * g.pitch + x];
+            s_under[r][c] = *px;
+            *px = s_arrow[r][c] == 'X' ? 0x000000 : 0xFFFFFF;
+        }
+    s_ptr_drawn = TRUE;
+}
+
+// Every drawing call is bracketed by these: the pointer is lifted off the
+// picture first and put back on top afterwards (calls may nest).
+static U0 draw_begin(U0) { if (s_draw_depth++ == 0) pointer_erase(); }
+static U0 draw_end(U0) { if (--s_draw_depth == 0) pointer_paint(); }
+
+U0 display_begin(U0) { draw_begin(); }
+U0 display_end(U0) { draw_end(); }
+
+U0 display_pointer(I32 x, I32 y, Bool visible) {
+    draw_begin();
+    s_ptr_x = x;
+    s_ptr_y = y;
+    s_ptr_visible = visible;
+    draw_end();
+}
+
 static inline U0 dispi_write(U32 reg, U16 v) { mmio_write16(s_dispi + reg * 2, v); }
 static inline U16 dispi_read(U32 reg) { return mmio_read16(s_dispi + reg * 2); }
 
@@ -42,6 +111,7 @@ DisplayState* display_state(U0) { return &g; }
 Bool display_set_mode(U32 w, U32 h) {
     if (!g.present || w == 0 || h == 0 || w > DISPLAY_MAX_W || h > DISPLAY_MAX_H) return FALSE;
     if ((U64)w * h * 4 > g.fb_size) return FALSE;
+    s_ptr_drawn = FALSE;                    // what was under it belongs to the old mode
     dispi_write(DISPI_ENABLE, 0);
     dispi_write(DISPI_XRES, (U16)w);
     dispi_write(DISPI_YRES, (U16)h);
@@ -90,10 +160,25 @@ U0 display_fill(U32 x, U32 y, U32 w, U32 h, U32 rgb) {
     if (!g.ready || x >= g.width || y >= g.height) return;
     if (w > g.width - x) w = g.width - x;
     if (h > g.height - y) h = g.height - y;
+    draw_begin();
     for (U32 r = 0; r < h; r++) {
         U32* row = g.fb + (U64)(y + r) * g.pitch + x;
         for (U32 c = 0; c < w; c++) row[c] = rgb;
     }
+    draw_end();
+}
+
+U0 display_scroll(U32 y, U32 h, U32 dy, U32 bg) {
+    if (!g.ready || y >= g.height) return;
+    if (h > g.height - y) h = g.height - y;
+    if (dy > h) dy = h;
+    draw_begin();
+    U32* dst = g.fb + (U64)y * g.pitch;
+    const U32* src = g.fb + (U64)(y + dy) * g.pitch;
+    U64 n = (U64)(h - dy) * g.pitch;
+    for (U64 i = 0; i < n; i++) dst[i] = src[i];           // forward copy: dst is below src
+    display_fill(0, y + h - dy, g.width, dy, bg);
+    draw_end();
 }
 
 // Test pattern, reproduced exactly by tools/test_display.py:
@@ -106,6 +191,7 @@ U0 display_test_pattern(U0) {
     if (!g.ready) return;
     static const U32 bars[8] = { 0xFFFFFF, 0xFFFF00, 0x00FFFF, 0x00FF00, 0xFF00FF, 0xFF0000, 0x0000FF, 0x000000 };
     U32 w = g.width, h = g.height, bw = w / 8;
+    draw_begin();
     for (U32 i = 0; i < 8; i++) display_fill(i * bw, 0, i == 7 ? w - 7 * bw : bw, h / 2, bars[i]);
     for (U32 y = h / 2; y < h * 3 / 4; y++) {
         U32* row = g.fb + (U64)y * g.pitch;
@@ -122,6 +208,7 @@ U0 display_test_pattern(U0) {
     display_fill(0, h - 1, w, 1, 0xFF0000);
     display_fill(0, 0, 1, h, 0xFF0000);
     display_fill(w - 1, 0, 1, h, 0xFF0000);
+    draw_end();
 }
 
 // ---- text ----------------------------------------------------------------------
@@ -138,9 +225,17 @@ static U0 draw_glyph(U32 x, U32 y, U32 cp, U32 fg, U32 bg, Bool opaque) {
     }
 }
 
+U0 display_glyph(U32 x, U32 y, U32 cp, U32 fg, U32 bg) {
+    if (!g.ready || x >= g.width || y >= g.height) return;
+    draw_begin();
+    draw_glyph(x, y, cp, fg, bg, TRUE);
+    draw_end();
+}
+
 U32 display_text(U32 x, U32 y, const char* s, U32 fg, U32 bg, Bool opaque) {
     if (!g.ready || !s) return x;
     U32 cx = x;
+    draw_begin();
     while (*s) {
         U32 cp = font_utf8_next(&s);
         if (cp == '\n') {
@@ -151,6 +246,7 @@ U32 display_text(U32 x, U32 y, const char* s, U32 fg, U32 bg, Bool opaque) {
         if (cx < g.width && y < g.height) draw_glyph(cx, y, cp, fg, bg, opaque);
         cx += FONT_WIDTH;
     }
+    draw_end();
     return cx;
 }
 

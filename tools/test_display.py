@@ -148,7 +148,12 @@ def main():
         check("[ OK ] DISPLAY          : bochs-display, 1024x768, 32 bpp" in vm.output(), "display ready at boot, 1024x768")
         m = vm.send("display", 2)
         check("1024x768, 32 bpp, pitch 1024" in vm.since(m), "display status reports the mode")
-        compare(vm.screendump(shot), np.zeros((768, 1024, 3), np.uint8), "screen cleared to black at boot")
+        # The console is on the screen (tools/test_input.py checks it); this test
+        # draws on its own, so the terminal is switched off first.
+        m = vm.send("term off", 1)
+        check("[TERM] off" in vm.since(m), "on-screen terminal switched off")
+        vm.send("display clear", 2)
+        compare(vm.screendump(shot), np.zeros((768, 1024, 3), np.uint8), "screen cleared to black")
 
         m = vm.send("display test", 3)
         check("test pattern drawn (1024x768)" in vm.since(m), "display test runs")

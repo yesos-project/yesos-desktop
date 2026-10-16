@@ -5,10 +5,10 @@ submodule): Machine mode only, a locked Z3-proven PMP, an integer-only kernel
 (no floating point, checked at every build), no Linux, libc or binary blobs.
 
 Today it is the core, its serial console, the RedSea v4 disk, **HD Audio
-output** (including WAV files played from the disk) and a **framebuffer**:
-no network
-services and no optional modules. Features (display, input, windows, apps in
-PMP cells) are added here one at a time, each with its own tests, brought over
+output** (including WAV files played from the disk), a **framebuffer** with
+the **console on the screen**, and a **virtio keyboard and tablet** (US or
+Spanish layout): no network services and no optional modules. Features
+(windows, a file browser, apps in PMP cells) are added here one at a time, each with its own tests, brought over
 piece by piece from the old desktop experiments in `yesos-lab`.
 
 The audio processing in `yesos-lab` labelled "EML" (resampler, dither,
@@ -30,8 +30,8 @@ make prover-setup        # once (Z3, in core/tools/.venv)
 make                     # yesos.elf
 make run                 # serial console (Ctrl-A X to quit), own yesos_disk.img, sound via PulseAudio
 make run AUDIO=none      # the same without sound (or AUDIO=pipewire, alsa)
-make run-gui             # the screen in a window (UI=gtk, or UI=sdl); console in the terminal
-make test                # tools/test_desktop.py, test_audio.py and test_display.py
+make run-gui             # the screen in a window (UI=gtk, or UI=sdl): type there or in the terminal
+make test                # tools/test_desktop.py, test_audio.py, test_display.py and test_input.py
 ```
 
 `python3 tools/test_desktop.py` (17 checks): it boots as YesOS Desktop with the
@@ -113,14 +113,77 @@ Display     display [status]   display test   display clear [rrggbb]   display m
             display print <x> <y> <rrggbb> <text>
 ```
 
-`python3 tools/test_display.py` (22 checks) boots with `-device
+`python3 tools/test_display.py` (23 checks) boots with `-device
 bochs-display`, draws from the console and takes screenshots through QEMU's
 monitor (`screendump`): the black screen at boot, the test pattern at
 1024x768, 800x600 and 1280x720, a solid colour, and Spanish text in four
 colours with a missing glyph (€) and a line clipped at the right edge all
 match the picture computed by the test **pixel for pixel**. A 9000x9000 mode is refused, and
 without a display device the system boots, says so, and the commands refuse
-cleanly.
+cleanly. (It switches the on-screen terminal off first, to draw on its own.)
+
+## Console on the screen (`src/terminal.c`)
+
+Everything the console writes is also drawn on the display: the core's
+kprintf hook sees it, and since core commit `4707457` the shell's echo of
+typed characters goes through it too. 128x48 characters at 1024x768, in the
+core's 8x16 font, with UTF-8, a cursor, scrolling, line wrap (backspace goes
+back over it), tabs and the ANSI sequences the core prints (colours 30-37,
+clear screen). It follows `display mode`. `term off` leaves the screen to
+the `display` commands.
+
+```text
+Terminal    term [status]   term on   term off   term clear
+```
+
+## Keyboard and pointer (`src/input.c`)
+
+- **virtio-input** (PCI 1AF4:1052): QEMU's `virtio-keyboard-pci`,
+  `virtio-tablet-pci` and `virtio-mouse-pci`, up to 4, each recognised by
+  the event types it reports; polled from the main loop. Rewritten from the
+  lab's driver: BARs from the core's PCI allocator (the lab used its own
+  fixed window), rings in their natural layout (the lab's were packed, the
+  bug that once made virtio-blk read torn indexes), the tablet's axis range
+  read from the device.
+- **Keyboard**: Linux key codes to UTF-8, typed into the console as if they
+  came from the serial port. Layouts `us` and `es` (Spanish: ñ, ¿ ¡, ç, º ª,
+  AltGr for @ # | € [ ] { }, and dead keys: ´ ¨ ` ^ followed by a vowel give
+  á ü à â ..., followed by a space the accent itself). Shift, caps lock,
+  keypad; Ctrl and Alt combinations type nothing.
+- **Pointer**: an arrow on the screen at the tablet's position (axis 0..max
+  scaled to 0..width-1), or moved by a mouse; the pixels under it are put
+  back when it moves, and all drawing happens under it. Clicks of the three
+  buttons, where the last one happened, and the wheel are counted.
+
+```text
+Input       input [status]   input layout us|es
+```
+
+`python3 tools/test_input.py` (27 checks) boots with a display, a
+virtio keyboard and a virtio tablet, and sends events through QEMU's QMP
+socket (`input-send-event`), as the window does:
+
+| What is sent | Result |
+|---|---|
+| US layout: letters, shifted symbols, digits | the shell receives exactly the typed line |
+| backspace, caps lock (and shift with it), Ctrl+H, Alt+H, keypad | `qq abcDEFg12+3*4-/.` |
+| Spanish layout: ñ Ñ ¡ ¿, dead keys with vowels and with space, ç º ª, shifted digits, AltGr | `ñÑ¡¿?áÉüÜòî´´nçÇºª"·/=@#\|€[]{}+*<>-_;:ÑA`, exact |
+| backspace after á and ñ | each removed whole |
+| tablet at 4 positions, corners included | the pixel expected from the axis range |
+| clicks (left twice, right, middle), wheel 3 up 1 down | counted, at the pointer, all released; wheel 2 |
+| pointer over a plain colour, moved, in the corner, text drawn across it | **pixel for pixel**: arrow on top, old place repainted, clipped |
+| typed text, command output, two `help` (the screen scrolls) | the screen equals the serial stream replayed by the test's own terminal, **pixel for pixel** |
+
+Honest limits:
+- Only the boot hart draws on the screen; output of the other harts reaches
+  the serial port only (counted as "dropped" by `term`). No scrollback.
+- Arrows, Home, End, function keys and Ctrl shortcuts are not mapped (the
+  console has no line editing yet); the layout is chosen with `input layout`
+  at each boot; no keyboard LEDs.
+- The font has no glyph for ç, º, ª, ·, ´, ¨, €, ò, î ...: they reach the
+  console correctly but show as `?` on the screen.
+- The pointer only moves and counts clicks: there are no windows yet.
+- Tested with QEMU's devices only; a real board would need its own drivers.
 
 The other console commands are the core's (see its README).
 

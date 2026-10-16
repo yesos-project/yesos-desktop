@@ -31,6 +31,23 @@ U0            display_test_pattern(U0);
 // the cell background is painted `bg`, else left as it is. Clipped to the
 // screen. Returns the x after the last character of the last line.
 U32           display_text(U32 x, U32 y, const char* utf8, U32 fg, U32 bg, Bool opaque);
+// One character cell, background painted (the on-screen terminal).
+U0            display_glyph(U32 x, U32 y, U32 cp, U32 fg, U32 bg);
+
+// Rows y+dy .. y+h-1 move up to y; the dy rows freed at the bottom are
+// painted bg (the on-screen terminal scrolls with it).
+U0            display_scroll(U32 y, U32 h, U32 dy, U32 bg);
+
+// Mouse pointer: an arrow drawn on top of the picture. The pixels under it
+// are saved and put back when it moves; every display_* call above draws
+// under it. (x, y) is the tip.
+#define DISPLAY_POINTER_W  11
+#define DISPLAY_POINTER_H  19
+U0            display_pointer(I32 x, I32 y, Bool visible);
+// Bracket several drawing calls so the pointer is lifted once, not per call.
+U0            display_begin(U0);
+U0            display_end(U0);
+
 U0            display_shell_register(U0);
 
 #endif // DISPLAY_H
