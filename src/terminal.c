@@ -4,6 +4,7 @@
 
 #include "terminal.h"
 #include "display.h"
+#include "surface.h"
 #include "font.h"
 #include "ports.h"
 #include "kprintf.h"
@@ -24,27 +25,28 @@ static U32  s_params[4], s_nparams;
 static U32  s_utf8_cp, s_utf8_left;
 static U32  s_mode_serial;          // display mode the layout was made for
 static TerminalLayoutFn s_layout;   // places the terminal (the desktop's window), or NULL: full screen
+static Surface* s_surf;             // where the text goes (the screen or the window's contents)
 
 TerminalState* terminal_state(U0) { return &g; }
 
 static U0 cursor(Bool show) {
-    if (!g.on) return;
-    display_fill(g.x + g.col * FONT_WIDTH, g.y + g.row * FONT_HEIGHT + FONT_HEIGHT - 2, FONT_WIDTH, 2,
-                 show ? s_fg : TERMINAL_BG);
+    if (!g.on || !s_surf) return;
+    surf_fill(s_surf, (I32)(g.x + g.col * FONT_WIDTH), (I32)(g.y + g.row * FONT_HEIGHT + FONT_HEIGHT - 2),
+              FONT_WIDTH, 2, show ? s_fg : TERMINAL_BG);
 }
 
 static U0 clear(U0) {
     g.col = g.row = 0;
     s_wrap_pending = FALSE;
-    if (g.on) display_fill(g.x, g.y, g.cols * FONT_WIDTH, g.rows * FONT_HEIGHT, TERMINAL_BG);
+    if (g.on && s_surf) surf_fill(s_surf, (I32)g.x, (I32)g.y, (I32)(g.cols * FONT_WIDTH), (I32)(g.rows * FONT_HEIGHT), TERMINAL_BG);
 }
 
-// The old cursor is not erased: when the area is cleared it is gone anyway,
-// and when it was moved the cursor moved with the pixels.
-U0 terminal_set_area(U32 x, U32 y, U32 cols, U32 rows, Bool clear_it) {
+U0 terminal_set_area(Surface* s, U32 x, U32 y, U32 cols, U32 rows, Bool clear_it) {
+    Bool other = s != s_surf;
+    s_surf = s;
     g.x = x;
     g.y = y;
-    if (clear_it || cols != g.cols || rows != g.rows) {
+    if (clear_it || other || cols != g.cols || rows != g.rows) {
         g.cols = cols ? cols : 1;
         g.rows = rows ? rows : 1;
         display_begin();
@@ -64,7 +66,7 @@ U0 terminal_relayout(U0) {
     s_mode_serial = d->mode_serial;
     if (!d->ready) return;
     if (s_layout) s_layout();
-    else terminal_set_area(0, 0, d->width / FONT_WIDTH, d->height / FONT_HEIGHT, TRUE);
+    else terminal_set_area(display_surface(), 0, 0, d->width / FONT_WIDTH, d->height / FONT_HEIGHT, TRUE);
 }
 
 static U0 newline(U0) {
@@ -73,14 +75,15 @@ static U0 newline(U0) {
     if (g.row + 1 < g.rows) {
         g.row++;
     } else {
-        display_scroll(g.x, g.y, g.cols * FONT_WIDTH, g.rows * FONT_HEIGHT, FONT_HEIGHT, TERMINAL_BG);
+        surf_scroll(s_surf, (I32)g.x, (I32)g.y, (I32)(g.cols * FONT_WIDTH), (I32)(g.rows * FONT_HEIGHT),
+                    FONT_HEIGHT, TERMINAL_BG);
         g.scrolls++;
     }
 }
 
 static U0 put_glyph(U32 cp) {
     if (s_wrap_pending) newline();
-    display_glyph(g.x + g.col * FONT_WIDTH, g.y + g.row * FONT_HEIGHT, cp, s_fg, TERMINAL_BG);
+    surf_glyph(s_surf, (I32)(g.x + g.col * FONT_WIDTH), (I32)(g.y + g.row * FONT_HEIGHT), cp, s_fg, TERMINAL_BG, TRUE);
     g.chars++;
     if (g.col + 1 < g.cols) g.col++;
     else s_wrap_pending = TRUE;
@@ -158,7 +161,7 @@ static U0 put(U8 b) {
 
 static U0 hook(char c) {
     if (!g.on) return;
-    if (smp_hart_id() != 0 || s_busy || !display_state()->ready) {
+    if (smp_hart_id() != 0 || s_busy || !display_state()->ready || !s_surf) {
         g.dropped++;
         return;
     }
@@ -204,7 +207,7 @@ static Bool term_run(const char* cmd) {
         terminal_enable(FALSE);
         kprintf("[TERM] off: the screen is left as it is\n");
     } else if (StrCmp(cmd, "term clear") == 0) {
-        if (g.on) { clear(); cursor(TRUE); }
+        if (g.on) { display_begin(); clear(); cursor(TRUE); display_end(); }
     } else if (shell_is_prefix("term", cmd) && (cmd[4] == ' ' || cmd[4] == '\0')) {
         kprintf("usage: term [status] | term on | term off | term clear\n");
     } else {

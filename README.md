@@ -6,11 +6,12 @@ submodule): Machine mode only, a locked Z3-proven PMP, an integer-only kernel
 
 Today it is the core, its serial console, the RedSea v4 disk, **HD Audio
 output** (including WAV files played from the disk), a **framebuffer** with
-a **desktop**: the console in a window dragged with the pointer, a
+a **desktop** of overlapping windows (the console in one of them), a
 **virtio keyboard and tablet** (US or Spanish layout): no network services;
-of the core's optional modules only `gfx` and `lineedit`. Features (more
-windows, a file browser, apps in PMP cells) are added here one at a time, each with its own tests, brought over
-piece by piece from the old desktop experiments in `yesos-lab`.
+of the core's optional modules only `gfx` and `lineedit`. Features (a file
+browser, apps in PMP cells) are added here one at a time, each with its own
+tests, brought over piece by piece from the old desktop experiments in
+`yesos-lab`.
 
 The audio processing in `yesos-lab` labelled "EML" (resampler, dither,
 limiter) turned out to be conventional fixed-point code: it uses none of the
@@ -139,36 +140,50 @@ the `display` commands.
 Terminal    term [status]   term on   term off   term clear
 ```
 
-## Desktop and window (`src/desktop.c`) — stage 1
+## Desktop and windows (`src/desktop.c`, `src/surface.c`)
 
-- A plain background and **one window** holding the console: a 2-pixel
-  border, a title bar with its title, the console's text area (100x40
-  characters, fewer if the mode is small).
-- **Dragged by its title bar** with the pointer (a press elsewhere does
-  nothing), or moved with `desktop move <x> <y>`. It always stays whole on
-  the screen, so a move is a copy of the window's pixels (overlapping
-  copies done in the safe order) plus the background painted only where the
-  window was and no longer is; the console keeps its text.
+- A plain background and **overlapping windows**, up to 8. Window 0 holds
+  the console and cannot be closed; others are opened with `window new`
+  and written into with `window text`.
+- Each window keeps its **contents in its own buffer** off the screen
+  (`Surface`); the console draws into its window's buffer. The screen is
+  **composed** only where something changed: background, the windows from
+  the bottom up, the pointer on top. So text written into a window that
+  others cover shows only where it is visible, and what a moved or closed
+  window covered comes back.
+- A **press** on a window brings it to the front and gives it the focus
+  (its title bar turns blue; the others' are grey). Its **title bar drags**
+  it; the **box** at the right of the title bar closes it. Windows always
+  stay whole on the screen. Keys still go to the console.
 - `desktop off` gives the whole screen to the console; `desktop on` puts
-  the window back where it was. A mode change lays everything out again.
+  the windows back. A mode change lays everything out again.
 
 ```text
 Desktop     desktop [status]   desktop on   desktop off   desktop move <x> <y>
+            window [list]   window new <cols> <rows> <title>   window text <id> <col> <row> <rrggbb> <text>
+            window front <id>   window move <id> <x> <y>   window close <id>
 ```
 
-`python3 tools/test_window.py` (17 checks) drags the window with tablet
-events sent through QMP and compares each screenshot **pixel for pixel**
-with the picture computed by the test (background, border, title, the
-console text replayed from the serial stream, the pointer): at boot, after
-a drag, after a move from the console with text typed at the new place,
-and after small overlapping moves. Presses outside the title bar move
-nothing, a drag past the edge stops with the window whole on the screen,
-`desktop off`/`on` and an 800x600 mode work. Leaving out one of the
-background bands painted after a move makes three of its comparisons fail
-(98 350 pixels in the first).
+`python3 tools/test_window.py` (35 checks, two boots) moves windows with
+tablet events sent through QMP and compares each screenshot **pixel for
+pixel** with the screen composed by the test's own model of the windows
+(background, borders, title bars focused or not, titles cut before the
+close box, close boxes, contents, the console replayed from the serial
+stream, the pointer):
 
-Not yet (next stages): several windows, overlap and focus, closing,
-resizing, a window's own contents kept off the screen.
+| Stage | What is checked |
+|---|---|
+| 1 | the console's window at boot, dragged, moved from the console with text typed at the new place, small overlapping moves; presses outside the title bar move nothing; a drag past the edge stops with the window whole; `desktop off`/`on`; 800x600 |
+| 2 | three windows, the newest on top and focused; a press on the console brings it over the others; `window front`; a window dragged over the console; text typed into the console under another window; the close box; the console's window cannot be closed; at most 8 windows; all closed again |
+
+Faults put in on purpose to see the test catch them: a background band
+left unpainted after a move (3 comparisons fail, 98 350 pixels); window
+contents drawn straight onto the screen instead of composed (the covered
+console check fails, 4 064 pixels); the grey of a title bar one step off
+(5 comparisons fail).
+
+Not yet: resizing, minimising, keys for windows other than the console,
+windows with their own programs (the file browser is next).
 
 ## Keyboard and pointer (`src/input.c`)
 
@@ -222,7 +237,7 @@ Honest limits:
   keyboard LEDs.
 - The font covers ASCII, the Latin-1 letters of Spanish and the Western
   languages' accented vowels, and €; anything else shows as `?`.
-- The pointer drags the console's window; there is nothing else to click yet.
+- The pointer moves, raises and closes windows; no window has a program of its own yet.
 - Tested with QEMU's devices only; a real board would need its own drivers.
 
 The other console commands are the core's (see its README).

@@ -2,6 +2,7 @@
 #define TERMINAL_H
 
 #include "types.h"
+#include "surface.h"
 
 // The console on the screen: everything the console writes (kprintf and
 // the shell's echo, through the kprintf hook) is also drawn on the display,
@@ -23,10 +24,11 @@ typedef struct {
 U0             terminal_init(U0);    // after display_init; on if the display is ready
 TerminalState* terminal_state(U0);
 U0             terminal_enable(Bool on);
-// Where the text goes: pixel (x, y), cols x rows characters. With clear_it
-// (or a new size) the area is cleared; otherwise the text already there is
-// kept (the caller moved it, e.g. a window being dragged).
-U0             terminal_set_area(U32 x, U32 y, U32 cols, U32 rows, Bool clear_it);
+// Where the text goes: pixel (x, y) of surface s (the screen, or the
+// contents of the desktop's console window), cols x rows characters. With
+// clear_it, another surface or a new size the area is cleared; otherwise
+// the text already there is kept.
+U0             terminal_set_area(Surface* s, U32 x, U32 y, U32 cols, U32 rows, Bool clear_it);
 // The function that places the terminal after a mode change or `term on`
 // (the desktop's window); NULL: the whole screen.
 typedef U0 (*TerminalLayoutFn)(U0);

@@ -2,6 +2,7 @@
 #define DISPLAY_H
 
 #include "types.h"
+#include "surface.h"
 
 // Linear framebuffer on QEMU's bochs-display (PCI 1234:1111): 32 bits per
 // pixel, 0x00RRGGBB. The mode is set through the Bochs VBE "DISPI" registers
@@ -32,15 +33,9 @@ U0            display_test_pattern(U0);
 // the cell background is painted `bg`, else left as it is. Clipped to the
 // screen. Returns the x after the last character of the last line.
 U32           display_text(U32 x, U32 y, const char* utf8, U32 fg, U32 bg, Bool opaque);
-// One character cell, background painted (the on-screen terminal).
-U0            display_glyph(U32 x, U32 y, U32 cp, U32 fg, U32 bg);
-
-// In the rectangle (x, y, w, h), rows y+dy .. y+h-1 move up to y and the dy
-// rows freed at the bottom are painted bg (the terminal scrolls with it).
-U0            display_scroll(U32 x, U32 y, U32 w, U32 h, U32 dy, U32 bg);
-// Copy the w x h pixels at (sx, sy) to (dx, dy); the two may overlap (a
-// window being dragged). Both rectangles must be on the screen.
-U0            display_copy(U32 sx, U32 sy, U32 w, U32 h, U32 dx, U32 dy);
+// The framebuffer as a surface (no damage callback). Drawing on it must be
+// bracketed by display_begin/display_end so the pointer stays on top.
+Surface*      display_surface(U0);
 
 // Mouse pointer: an arrow drawn on top of the picture. The pixels under it
 // are saved and put back when it moves; every display_* call above draws
