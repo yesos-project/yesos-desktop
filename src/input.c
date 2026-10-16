@@ -14,6 +14,7 @@
 #include "kprintf.h"
 #include "memory.h"
 #include "shell.h"
+#include "vfs.h"
 
 #define VIRTIO_VENDOR             0x1AF4
 #define VIRTIO_DEV_INPUT          0x1052   // 0x1040 + 18
@@ -83,6 +84,15 @@
 #define KEY_KPENTER               96
 #define KEY_RIGHTCTRL             97
 #define KEY_RIGHTALT              100
+#define KEY_HOME                  102
+#define KEY_UP                    103
+#define KEY_LEFT                  105
+#define KEY_RIGHT                 106
+#define KEY_END                   107
+#define KEY_DOWN                  108
+#define KEY_DELETE                111
+
+#define LAYOUT_FILE               "/input.cfg"
 
 #define QUEUE_SIZE                64
 
@@ -177,6 +187,11 @@ static U0 type_cp(U32 cp) {
     g.chars_typed++;
 }
 
+static U0 send_seq(const char* s) {
+    s_dead = 0;
+    while (*s) shell_process_char(*s++);
+}
+
 static U32 compose(U16 dead, U32 cp) {
     static const char vowels[] = "aeiou";
     for (U32 v = 0; v < 5; v++) {
@@ -197,6 +212,14 @@ static U0 key_press(U16 code) {
     case KEY_CAPSLOCK:   s_caps = !s_caps; return;
     case KEY_ENTER: case KEY_KPENTER: s_dead = 0; shell_process_char('\r'); return;
     case KEY_BACKSPACE:  s_dead = 0; shell_process_char('\b'); return;
+    // Editing keys: the escape sequences a terminal sends (the shell edits the line).
+    case KEY_UP:     send_seq("\x1b[A"); return;
+    case KEY_DOWN:   send_seq("\x1b[B"); return;
+    case KEY_RIGHT:  send_seq("\x1b[C"); return;
+    case KEY_LEFT:   send_seq("\x1b[D"); return;
+    case KEY_HOME:   send_seq("\x1b[H"); return;
+    case KEY_END:    send_seq("\x1b[F"); return;
+    case KEY_DELETE: send_seq("\x1b[3~"); return;
     default: break;
     }
     if (s_ctrl || s_alt || code >= 128) return;
@@ -456,6 +479,14 @@ Bool input_init(U0) {
         start_device(&pd);
     }
     if (g.pointers) display_pointer(g.x, g.y, TRUE);
+    // The layout chosen last time, kept on the RedSea disk.
+    size_t n = 0;
+    U8* cfg = vfs_read_file_exact(LAYOUT_FILE, &n);
+    if (cfg) {
+        if (n >= 9 && MemCmp(cfg, "layout es", 9) == 0) g.layout = LAYOUT_ES;
+        g.layout_saved = TRUE;
+        Free(cfg);
+    }
     return g.devices > 0;
 }
 
@@ -486,7 +517,10 @@ static Bool input_run(const char* cmd) {
     if (StrCmp(cmd, "input layout us") == 0 || StrCmp(cmd, "input layout es") == 0) {
         g.layout = cmd[13] == 'e' ? LAYOUT_ES : LAYOUT_US;
         s_dead = 0;
-        kprintf("[INPUT] keyboard layout %s\n", g.layout == LAYOUT_ES ? "es (Spanish)" : "us");
+        const char* line = g.layout == LAYOUT_ES ? "layout es\n" : "layout us\n";
+        g.layout_saved = vfs_write_file(LAYOUT_FILE, line, StrLen(line));
+        kprintf("[INPUT] keyboard layout %s%s\n", g.layout == LAYOUT_ES ? "es (Spanish)" : "us",
+                g.layout_saved ? ", saved in " LAYOUT_FILE : " (could not be saved: no disk?)");
         return TRUE;
     }
     if (shell_is_prefix("input", cmd) && (cmd[5] == ' ' || cmd[5] == '\0')) {

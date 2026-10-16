@@ -39,8 +39,8 @@ U0 product_boot_summary(U0) {
     if (terminal_state()->on) kprintf(" [ OK ] TERMINAL         : console on the screen, %ux%u characters\n",
                                       (U64)terminal_state()->cols, (U64)terminal_state()->rows);
     InputState* in = input_state();
-    if (in->devices) kprintf(" [ OK ] INPUT            : virtio-input, %u keyboard(s), %u pointer(s), layout us\n",
-                             (U64)in->keyboards, (U64)in->pointers);
+    if (in->devices) kprintf(" [ OK ] INPUT            : virtio-input, %u keyboard(s), %u pointer(s), layout %s\n",
+                             (U64)in->keyboards, (U64)in->pointers, in->layout == LAYOUT_ES ? "es" : "us");
     else kprintf(" [ -- ] INPUT            : no virtio-input devices (keyboard: the serial console)\n");
 }
 

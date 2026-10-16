@@ -116,7 +116,7 @@ def draw_text(img, x, y, text, color):
     cx = x
     for ch in text:
         cp = ord(ch)
-        g = FONT.get(cp) if cp <= 0xFF else None
+        g = FONT.get(cp)
         if cp != 0x20 and (g is None or not any(g)):
             g = FONT[ord("?")]
         for r in range(16):
@@ -173,7 +173,7 @@ def main():
         want = np.zeros((720, 1280, 3), np.uint8)
         lines = [(8, 8, 0xFFFFFF, "¿Año nuevo? ¡Sí! Él comió ñandú en Señorío."),
                  (8, 40, 0xFFCC00, "ÁÉÍÓÚ áéíóú ñÑ üÜ 25° «hola» gjpqy_;"),
-                 (8, 72, 0x00FF00, "Unknown glyph: € (drawn as '?')"),
+                 (8, 72, 0x00FF00, "Unknown glyph: → (drawn as '?'), but ç º ª €"),
                  (1256, 120, 0xFF00FF, "clipped at the right edge")]
         for x, y, c, text in lines:
             m = vm.send(f"display print {x} {y} {c:06x} {text}", 2)

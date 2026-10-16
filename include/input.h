@@ -6,8 +6,10 @@
 // virtio-input devices (QEMU virtio-keyboard-pci, virtio-tablet-pci,
 // virtio-mouse-pci), polled from the main loop. Keys are translated with a
 // keyboard layout (US or Spanish, dead keys for accents) into UTF-8 and
-// typed into the console. The pointer is kept in screen pixels and drawn on
-// the display.
+// typed into the console; arrows, Home, End and Delete as the escape
+// sequences a terminal sends (the core's shell edits the line). The layout
+// is kept in /input.cfg on the RedSea disk. The pointer is kept in screen
+// pixels and drawn on the display.
 
 #define INPUT_MAX_DEVICES  4
 
@@ -25,6 +27,7 @@ typedef struct {
     I32  click_x, click_y;          // where the last press happened
     I64  wheel;                     // sum of the wheel steps
     InputLayout layout;
+    Bool        layout_saved;       // read from or written to /input.cfg on the disk
 } InputState;
 
 Bool        input_init(U0);         // find and start every virtio-input device

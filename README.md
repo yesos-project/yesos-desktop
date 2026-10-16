@@ -117,7 +117,7 @@ Display     display [status]   display test   display clear [rrggbb]   display m
 bochs-display`, draws from the console and takes screenshots through QEMU's
 monitor (`screendump`): the black screen at boot, the test pattern at
 1024x768, 800x600 and 1280x720, a solid colour, and Spanish text in four
-colours with a missing glyph (€) and a line clipped at the right edge all
+colours with a missing glyph (→) and a line clipped at the right edge all
 match the picture computed by the test **pixel for pixel**. A 9000x9000 mode is refused, and
 without a display device the system boots, says so, and the commands refuse
 cleanly. (It switches the on-screen terminal off first, to draw on its own.)
@@ -149,7 +149,12 @@ Terminal    term [status]   term on   term off   term clear
   came from the serial port. Layouts `us` and `es` (Spanish: ñ, ¿ ¡, ç, º ª,
   AltGr for @ # | € [ ] { }, and dead keys: ´ ¨ ` ^ followed by a vowel give
   á ü à â ..., followed by a space the accent itself). Shift, caps lock,
-  keypad; Ctrl and Alt combinations type nothing.
+  keypad; Ctrl and Alt combinations type nothing. The layout is kept in
+  `/input.cfg` on the RedSea disk and used again at the next boot.
+- **Editing keys**: arrows, Home, End and Delete reach the console as the
+  escape sequences a terminal sends, so the core's line editor (cursor
+  inside the line, the last 16 commands with up and down) works the same
+  from the window and from the serial port.
 - **Pointer**: an arrow on the screen at the tablet's position (axis 0..max
   scaled to 0..width-1), or moved by a mouse; the pixels under it are put
   back when it moves, and all drawing happens under it. Clicks of the three
@@ -159,7 +164,7 @@ Terminal    term [status]   term on   term off   term clear
 Input       input [status]   input layout us|es
 ```
 
-`python3 tools/test_input.py` (27 checks) boots with a display, a
+`python3 tools/test_input.py` (35 checks) boots with a display, a
 virtio keyboard and a virtio tablet, and sends events through QEMU's QMP
 socket (`input-send-event`), as the window does:
 
@@ -169,6 +174,8 @@ socket (`input-send-event`), as the window does:
 | backspace, caps lock (and shift with it), Ctrl+H, Alt+H, keypad | `qq abcDEFg12+3*4-/.` |
 | Spanish layout: ñ Ñ ¡ ¿, dead keys with vowels and with space, ç º ª, shifted digits, AltGr | `ñÑ¡¿?áÉüÜòî´´nçÇºª"·/=@#\|€[]{}+*<>-_;:ÑA`, exact |
 | backspace after á and ñ | each removed whole |
+| left, Home, End, Delete, up/down from the virtio keyboard | the line edited as expected; history recalled |
+| `input layout es`, reboot on the same disk | the boot says `layout es`; ñ and ó type as Spanish |
 | tablet at 4 positions, corners included | the pixel expected from the axis range |
 | clicks (left twice, right, middle), wheel 3 up 1 down | counted, at the pointer, all released; wheel 2 |
 | pointer over a plain colour, moved, in the corner, text drawn across it | **pixel for pixel**: arrow on top, old place repainted, clipped |
@@ -177,11 +184,10 @@ socket (`input-send-event`), as the window does:
 Honest limits:
 - Only the boot hart draws on the screen; output of the other harts reaches
   the serial port only (counted as "dropped" by `term`). No scrollback.
-- Arrows, Home, End, function keys and Ctrl shortcuts are not mapped (the
-  console has no line editing yet); the layout is chosen with `input layout`
-  at each boot; no keyboard LEDs.
-- The font has no glyph for ç, º, ª, ·, ´, ¨, €, ò, î ...: they reach the
-  console correctly but show as `?` on the screen.
+- Function keys, Page Up/Down and Ctrl shortcuts are not mapped; no
+  keyboard LEDs.
+- The font covers ASCII, the Latin-1 letters of Spanish and the Western
+  languages' accented vowels, and €; anything else shows as `?`.
 - The pointer only moves and counts clicks: there are no windows yet.
 - Tested with QEMU's devices only; a real board would need its own drivers.
 

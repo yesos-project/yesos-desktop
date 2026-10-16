@@ -157,7 +157,7 @@ def draw_arrow(img, x, y):
 def glyph(cp):
     if cp == 0x20:
         return FONT[0x20]
-    g = FONT.get(cp) if cp <= 0xFF else None
+    g = FONT.get(cp)
     return g if g is not None and any(g) else FONT[ord("?")]
 
 
@@ -383,7 +383,31 @@ def main():
         vm.tap("n")
         got = enter_and_read(vm)
         check(got == "qq n", f"backspace removes whole UTF-8 characters ({got!r})")
-        vm.send("input layout us", 1)
+        m = vm.send("input layout us", 1)
+        check("keyboard layout us, saved in /input.cfg" in vm.since(m), "input layout us: saved on the disk")
+
+        # ---- editing keys: the shell's line editor, from the virtio keyboard ----
+        type_us(vm, "qq abc")
+        vm.tap("left")
+        vm.tap("left")
+        type_us(vm, "X")
+        vm.tap("home")
+        type_us(vm, "Y")
+        vm.tap("end")
+        type_us(vm, "Z")
+        got = enter_and_read(vm)
+        check(got == "Yqq aXbcZ", f"left, Home, End: {got!r}")
+        type_us(vm, "qq abcd")
+        vm.tap("left")
+        vm.tap("left")
+        vm.tap("delete")
+        got = enter_and_read(vm)
+        check(got == "qq abd", f"Delete: {got!r}")
+        vm.tap("up")
+        vm.tap("up")
+        vm.tap("down")
+        got = enter_and_read(vm)
+        check(got == "qq abd", f"up, up, down: the last line again: {got!r}")
 
         res = status(vm)
         k = re.search(r"Keys    : (\d+) presses, (\d+) characters typed", res)
@@ -464,6 +488,20 @@ def main():
         m = vm.send("term", 1)
         check("on, 100x37 characters" in vm.since(m), "terminal follows the new mode: 100x37")
         check("FATAL" not in vm.output() and "RISC-V EXCEPTION" not in vm.output(), "no kernel faults")
+        m = vm.send("input layout es", 1.5)
+        check("saved in /input.cfg" in vm.since(m), "input layout es saved before rebooting")
+    finally:
+        vm.stop()
+
+    # ---- the layout survives a reboot ----
+    vm = InputYesOS(disk, 40000 + (os.getpid() + 1) % 20000, qmp + "2")
+    try:
+        check(vm.wait_for("YesOS [", 90), "second boot on the same disk")
+        check("1 pointer(s), layout es" in vm.output(), "boot summary: layout es, read from /input.cfg")
+        for k in (("q",), ("q",), ("spc",), ("semicolon",), ("apostrophe",), ("o",)):
+            vm.tap(k[0], *k[1:])
+        got = enter_and_read(vm)
+        check(got == "qq ñó", f"the Spanish layout is in use after the reboot ({got!r})")
     finally:
         vm.stop()
     shutil.rmtree(tmpdir, ignore_errors=True)
