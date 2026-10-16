@@ -36,8 +36,6 @@ On this desktop:
 
 Keyboard: US or Spanish (input layout es),
 with accents: á é í ó ú ñ ü ¿ ¡ €
-
-MIT. In memory of Terry A. Davis (1969-2018).
 """
 
 
