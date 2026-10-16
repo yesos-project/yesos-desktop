@@ -17,6 +17,7 @@ typedef struct {
     U32*      fb;
     U64       fb_size;              // bytes of video memory (BAR0)
     U32       width, height, pitch; // pitch in pixels
+    U32       mode_serial;          // +1 at every mode change (layouts follow it)
 } DisplayState;
 
 Bool          display_init(U0);    // find the device and set the default mode
@@ -34,9 +35,12 @@ U32           display_text(U32 x, U32 y, const char* utf8, U32 fg, U32 bg, Bool 
 // One character cell, background painted (the on-screen terminal).
 U0            display_glyph(U32 x, U32 y, U32 cp, U32 fg, U32 bg);
 
-// Rows y+dy .. y+h-1 move up to y; the dy rows freed at the bottom are
-// painted bg (the on-screen terminal scrolls with it).
-U0            display_scroll(U32 y, U32 h, U32 dy, U32 bg);
+// In the rectangle (x, y, w, h), rows y+dy .. y+h-1 move up to y and the dy
+// rows freed at the bottom are painted bg (the terminal scrolls with it).
+U0            display_scroll(U32 x, U32 y, U32 w, U32 h, U32 dy, U32 bg);
+// Copy the w x h pixels at (sx, sy) to (dx, dy); the two may overlap (a
+// window being dragged). Both rectangles must be on the screen.
+U0            display_copy(U32 sx, U32 sy, U32 w, U32 h, U32 dx, U32 dy);
 
 // Mouse pointer: an arrow drawn on top of the picture. The pixels under it
 // are saved and put back when it moves; every display_* call above draws

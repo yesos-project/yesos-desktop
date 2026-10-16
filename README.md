@@ -6,9 +6,10 @@ submodule): Machine mode only, a locked Z3-proven PMP, an integer-only kernel
 
 Today it is the core, its serial console, the RedSea v4 disk, **HD Audio
 output** (including WAV files played from the disk), a **framebuffer** with
-the **console on the screen**, and a **virtio keyboard and tablet** (US or
-Spanish layout): no network services and no optional modules. Features
-(windows, a file browser, apps in PMP cells) are added here one at a time, each with its own tests, brought over
+a **desktop**: the console in a window dragged with the pointer, a
+**virtio keyboard and tablet** (US or Spanish layout): no network services;
+of the core's optional modules only `gfx` and `lineedit`. Features (more
+windows, a file browser, apps in PMP cells) are added here one at a time, each with its own tests, brought over
 piece by piece from the old desktop experiments in `yesos-lab`.
 
 The audio processing in `yesos-lab` labelled "EML" (resampler, dither,
@@ -31,7 +32,7 @@ make                     # yesos.elf
 make run                 # serial console (Ctrl-A X to quit), own yesos_disk.img, sound via PulseAudio
 make run AUDIO=none      # the same without sound (or AUDIO=pipewire, alsa)
 make run-gui             # the screen in a window (UI=gtk, or UI=sdl): type there or in the terminal
-make test                # tools/test_desktop.py, test_audio.py, test_display.py and test_input.py
+make test                # tools/test_desktop.py, test_audio.py, test_display.py, test_input.py, test_window.py
 ```
 
 `python3 tools/test_desktop.py` (17 checks): it boots as YesOS Desktop with the
@@ -124,9 +125,11 @@ cleanly. (It switches the on-screen terminal off first, to draw on its own.)
 
 ## Console on the screen (`src/terminal.c`)
 
-Everything the console writes is also drawn on the display: the core's
-kprintf hook sees it, and since core commit `4707457` the shell's echo of
-typed characters goes through it too. 128x48 characters at 1024x768, in the
+Everything the console writes is also drawn on the display, in the
+desktop's window (below) or, with `desktop off`, on the whole screen: the
+core's kprintf hook sees it, and since core commit `4707457` the shell's echo of
+typed characters goes through it too. 100x40 characters in the window (128x48
+on the whole screen at 1024x768), in the
 core's 8x16 font, with UTF-8, a cursor, scrolling, line wrap (backspace goes
 back over it), tabs and the ANSI sequences the core prints (colours 30-37,
 clear screen). It follows `display mode`. `term off` leaves the screen to
@@ -135,6 +138,37 @@ the `display` commands.
 ```text
 Terminal    term [status]   term on   term off   term clear
 ```
+
+## Desktop and window (`src/desktop.c`) — stage 1
+
+- A plain background and **one window** holding the console: a 2-pixel
+  border, a title bar with its title, the console's text area (100x40
+  characters, fewer if the mode is small).
+- **Dragged by its title bar** with the pointer (a press elsewhere does
+  nothing), or moved with `desktop move <x> <y>`. It always stays whole on
+  the screen, so a move is a copy of the window's pixels (overlapping
+  copies done in the safe order) plus the background painted only where the
+  window was and no longer is; the console keeps its text.
+- `desktop off` gives the whole screen to the console; `desktop on` puts
+  the window back where it was. A mode change lays everything out again.
+
+```text
+Desktop     desktop [status]   desktop on   desktop off   desktop move <x> <y>
+```
+
+`python3 tools/test_window.py` (17 checks) drags the window with tablet
+events sent through QMP and compares each screenshot **pixel for pixel**
+with the picture computed by the test (background, border, title, the
+console text replayed from the serial stream, the pointer): at boot, after
+a drag, after a move from the console with text typed at the new place,
+and after small overlapping moves. Presses outside the title bar move
+nothing, a drag past the edge stops with the window whole on the screen,
+`desktop off`/`on` and an 800x600 mode work. Leaving out one of the
+background bands painted after a move makes three of its comparisons fail
+(98 350 pixels in the first).
+
+Not yet (next stages): several windows, overlap and focus, closing,
+resizing, a window's own contents kept off the screen.
 
 ## Keyboard and pointer (`src/input.c`)
 
@@ -188,7 +222,7 @@ Honest limits:
   keyboard LEDs.
 - The font covers ASCII, the Latin-1 letters of Spanish and the Western
   languages' accented vowels, and €; anything else shows as `?`.
-- The pointer only moves and counts clicks: there are no windows yet.
+- The pointer drags the console's window; there is nothing else to click yet.
 - Tested with QEMU's devices only; a real board would need its own drivers.
 
 The other console commands are the core's (see its README).

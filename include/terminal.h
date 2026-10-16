@@ -4,8 +4,9 @@
 #include "types.h"
 
 // The console on the screen: everything the console writes (kprintf and
-// the shell's echo, through the kprintf hook) is also drawn on the display
-// in the core's 8x16 font, with scrolling, a cursor, UTF-8 and the few
+// the shell's echo, through the kprintf hook) is also drawn on the display,
+// on the whole screen or in the desktop's window, in the core's 8x16 font,
+// with scrolling, a cursor, UTF-8 and the few
 // ANSI sequences the core uses (colours, clear screen). Only the boot hart
 // draws: output from other harts reaches the serial port only.
 
@@ -14,6 +15,7 @@
 
 typedef struct {
     Bool on;
+    U32  x, y;                      // top-left pixel of the text area
     U32  cols, rows, col, row;
     U64  chars, scrolls, dropped;   // dropped: other harts, or output while drawing
 } TerminalState;
@@ -21,6 +23,15 @@ typedef struct {
 U0             terminal_init(U0);    // after display_init; on if the display is ready
 TerminalState* terminal_state(U0);
 U0             terminal_enable(Bool on);
+// Where the text goes: pixel (x, y), cols x rows characters. With clear_it
+// (or a new size) the area is cleared; otherwise the text already there is
+// kept (the caller moved it, e.g. a window being dragged).
+U0             terminal_set_area(U32 x, U32 y, U32 cols, U32 rows, Bool clear_it);
+// The function that places the terminal after a mode change or `term on`
+// (the desktop's window); NULL: the whole screen.
+typedef U0 (*TerminalLayoutFn)(U0);
+U0             terminal_set_layout(TerminalLayoutFn fn);
+U0             terminal_relayout(U0);
 U0             terminal_shell_register(U0);
 
 #endif // TERMINAL_H

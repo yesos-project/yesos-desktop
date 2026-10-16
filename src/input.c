@@ -15,6 +15,7 @@
 #include "memory.h"
 #include "shell.h"
 #include "vfs.h"
+#include "desktop.h"
 
 #define VIRTIO_VENDOR             0x1AF4
 #define VIRTIO_DEV_INPUT          0x1052   // 0x1040 + 18
@@ -287,6 +288,7 @@ static U0 pointer_to(I32 x, I32 y) {
     g.x = x;
     g.y = y;
     display_pointer(x, y, TRUE);
+    desktop_pointer(x, y, g.buttons);
 }
 
 // Absolute axis value to a pixel: min -> 0, max -> size - 1.
@@ -307,6 +309,7 @@ static U0 button(U32 b, Bool down) {
     } else {
         g.buttons &= ~(1U << b);
     }
+    desktop_pointer(g.x, g.y, g.buttons);
 }
 
 static U0 handle_event(Device* dev, const struct input_event* ev) {

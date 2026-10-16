@@ -11,6 +11,7 @@
 #include "display.h"
 #include "terminal.h"
 #include "input.h"
+#include "desktop.h"
 
 const char* const PRODUCT_NAME = "YesOS Desktop";
 
@@ -24,6 +25,8 @@ U0 product_init(U0) {
     display_shell_register();
     terminal_init();
     terminal_shell_register();
+    desktop_init();
+    desktop_shell_register();
     input_init();
     input_shell_register();
 }
@@ -38,6 +41,8 @@ U0 product_boot_summary(U0) {
     else kprintf(" [ -- ] DISPLAY          : %s\n", d->present ? "bochs-display not usable" : "no display");
     if (terminal_state()->on) kprintf(" [ OK ] TERMINAL         : console on the screen, %ux%u characters\n",
                                       (U64)terminal_state()->cols, (U64)terminal_state()->rows);
+    if (desktop_state()->on) kprintf(" [ OK ] WINDOWS          : desktop, the console in a window at %d,%d\n",
+                                     (I64)desktop_state()->x, (I64)desktop_state()->y);
     InputState* in = input_state();
     if (in->devices) kprintf(" [ OK ] INPUT            : virtio-input, %u keyboard(s), %u pointer(s), layout %s\n",
                              (U64)in->keyboards, (U64)in->pointers, in->layout == LAYOUT_ES ? "es" : "us");

@@ -34,7 +34,7 @@ run-gui: $(ELF) yesos_disk.img
 	qemu-system-riscv64 $(QEMU_CPU) $(QEMU_DISK) $(QEMU_AUDIO) $(QEMU_SCREEN) -kernel $(ELF) \
 		-display $(UI) -serial mon:stdio
 
-TESTS = test_desktop test_audio test_display test_input
+TESTS = test_desktop test_audio test_display test_input test_window
 test: $(ELF)
 	@fail=0; for t in $(TESTS); do echo "== $$t"; python3 tools/$$t.py || fail=1; done; exit $$fail
 

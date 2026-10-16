@@ -323,8 +323,8 @@ def main():
         out = vm.output()
         check("[ OK ] INPUT            : virtio-input, 1 keyboard(s), 1 pointer(s), layout us" in out,
               "boot summary: one keyboard and one pointer")
-        check("[ OK ] TERMINAL         : console on the screen, 128x48 characters" in out,
-              "boot summary: console on the screen, 128x48")
+        check("[ OK ] TERMINAL         : console on the screen, 100x40 characters" in out,
+              "boot summary: console on the screen, 100x40 (in the desktop's window)")
         res = status(vm)
         check("QEMU Virtio Keyboard, keyboard" in res and "QEMU Virtio Tablet, tablet" in res,
               "input status names both devices")
@@ -456,7 +456,8 @@ def main():
         draw_arrow(want, 8000 * (W - 1) // 32767, 4000 * (H - 1) // 32767)
         compare(vm.screendump(shot), want, "text drawn under the pointer: the pointer stays on top")
 
-        # ---- the console on the screen ----
+        # ---- the console on the screen (whole screen; the window: test_window.py) ----
+        vm.send("desktop off", 1.5)
         vm.pointer(32767, 0)
         start = len(vm.raw())
         vm.send("term on", 1.5)
@@ -479,7 +480,7 @@ def main():
         vm.tap("ret")
         time.sleep(1)
         m = vm.send("term", 1)
-        st = re.search(r"Terminal: on, 128x48 characters, cursor at (\d+),(\d+); \d+ characters drawn, (\d+) scrolls, (\d+) dropped",
+        st = re.search(r"Terminal: on, 128x48 characters at 0,0, cursor at (\d+),(\d+); \d+ characters drawn, (\d+) scrolls, (\d+) dropped",
                        vm.since(m))
         check(st is not None and st.group(4) == "0", f"term status: {st.group(0) if st else vm.since(m)!r}")
 

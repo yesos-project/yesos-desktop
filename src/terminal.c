@@ -22,21 +22,49 @@ static Bool s_busy;
 static U8   s_esc;                  // 0 none, 1 after ESC, 2 inside "ESC ["
 static U32  s_params[4], s_nparams;
 static U32  s_utf8_cp, s_utf8_left;
+static U32  s_mode_serial;          // display mode the layout was made for
+static TerminalLayoutFn s_layout;   // places the terminal (the desktop's window), or NULL: full screen
 
 TerminalState* terminal_state(U0) { return &g; }
 
 static U0 cursor(Bool show) {
-    display_fill(g.col * FONT_WIDTH, g.row * FONT_HEIGHT + FONT_HEIGHT - 2, FONT_WIDTH, 2,
+    if (!g.on) return;
+    display_fill(g.x + g.col * FONT_WIDTH, g.y + g.row * FONT_HEIGHT + FONT_HEIGHT - 2, FONT_WIDTH, 2,
                  show ? s_fg : TERMINAL_BG);
 }
 
 static U0 clear(U0) {
-    DisplayState* d = display_state();
-    g.cols = d->width / FONT_WIDTH;
-    g.rows = d->height / FONT_HEIGHT;
     g.col = g.row = 0;
     s_wrap_pending = FALSE;
-    display_fill(0, 0, d->width, d->height, TERMINAL_BG);
+    if (g.on) display_fill(g.x, g.y, g.cols * FONT_WIDTH, g.rows * FONT_HEIGHT, TERMINAL_BG);
+}
+
+// The old cursor is not erased: when the area is cleared it is gone anyway,
+// and when it was moved the cursor moved with the pixels.
+U0 terminal_set_area(U32 x, U32 y, U32 cols, U32 rows, Bool clear_it) {
+    g.x = x;
+    g.y = y;
+    if (clear_it || cols != g.cols || rows != g.rows) {
+        g.cols = cols ? cols : 1;
+        g.rows = rows ? rows : 1;
+        display_begin();
+        clear();
+        cursor(TRUE);
+        display_end();
+    }
+}
+
+U0 terminal_set_layout(TerminalLayoutFn fn) {
+    s_layout = fn;
+    terminal_relayout();
+}
+
+U0 terminal_relayout(U0) {
+    DisplayState* d = display_state();
+    s_mode_serial = d->mode_serial;
+    if (!d->ready) return;
+    if (s_layout) s_layout();
+    else terminal_set_area(0, 0, d->width / FONT_WIDTH, d->height / FONT_HEIGHT, TRUE);
 }
 
 static U0 newline(U0) {
@@ -45,14 +73,14 @@ static U0 newline(U0) {
     if (g.row + 1 < g.rows) {
         g.row++;
     } else {
-        display_scroll(0, g.rows * FONT_HEIGHT, FONT_HEIGHT, TERMINAL_BG);
+        display_scroll(g.x, g.y, g.cols * FONT_WIDTH, g.rows * FONT_HEIGHT, FONT_HEIGHT, TERMINAL_BG);
         g.scrolls++;
     }
 }
 
 static U0 put_glyph(U32 cp) {
     if (s_wrap_pending) newline();
-    display_glyph(g.col * FONT_WIDTH, g.row * FONT_HEIGHT, cp, s_fg, TERMINAL_BG);
+    display_glyph(g.x + g.col * FONT_WIDTH, g.y + g.row * FONT_HEIGHT, cp, s_fg, TERMINAL_BG);
     g.chars++;
     if (g.col + 1 < g.cols) g.col++;
     else s_wrap_pending = TRUE;
@@ -137,8 +165,8 @@ static U0 hook(char c) {
     s_busy = TRUE;
     DisplayState* d = display_state();
     display_begin();
-    if (d->width / FONT_WIDTH != g.cols || d->height / FONT_HEIGHT != g.rows) clear();   // new mode
-    else cursor(FALSE);
+    if (d->mode_serial != s_mode_serial) terminal_relayout();   // new mode: lay out again
+    cursor(FALSE);
     put((U8)c);
     cursor(TRUE);
     display_end();
@@ -152,8 +180,7 @@ U0 terminal_enable(Bool on) {
         s_fg = TERMINAL_FG;
         s_esc = 0;
         s_utf8_left = 0;
-        clear();
-        cursor(TRUE);
+        terminal_relayout();
     }
 }
 
@@ -167,9 +194,9 @@ U0 terminal_init(U0) {
 
 static Bool term_run(const char* cmd) {
     if (StrCmp(cmd, "term") == 0 || StrCmp(cmd, "term status") == 0) {
-        kprintf("Terminal: %s, %ux%u characters, cursor at %u,%u; %u characters drawn, %u scrolls, "
-                "%u dropped\n", g.on ? "on" : "off", (U64)g.cols, (U64)g.rows, (U64)g.col, (U64)g.row,
-                g.chars, g.scrolls, g.dropped);
+        kprintf("Terminal: %s, %ux%u characters at %u,%u, cursor at %u,%u; %u characters drawn, %u scrolls, "
+                "%u dropped\n", g.on ? "on" : "off", (U64)g.cols, (U64)g.rows, (U64)g.x, (U64)g.y,
+                (U64)g.col, (U64)g.row, g.chars, g.scrolls, g.dropped);
     } else if (StrCmp(cmd, "term on") == 0) {
         if (!display_state()->ready) kprintf("term: no usable display\n");
         terminal_enable(TRUE);

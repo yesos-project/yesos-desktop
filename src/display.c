@@ -130,6 +130,7 @@ Bool display_set_mode(U32 w, U32 h) {
     g.height = h;
     g.pitch = dispi_read(DISPI_VIRT_WIDTH);
     g.ready = TRUE;
+    g.mode_serial++;
     return TRUE;
 }
 
@@ -168,16 +169,33 @@ U0 display_fill(U32 x, U32 y, U32 w, U32 h, U32 rgb) {
     draw_end();
 }
 
-U0 display_scroll(U32 y, U32 h, U32 dy, U32 bg) {
-    if (!g.ready || y >= g.height) return;
+U0 display_scroll(U32 x, U32 y, U32 w, U32 h, U32 dy, U32 bg) {
+    if (!g.ready || x >= g.width || y >= g.height) return;
+    if (w > g.width - x) w = g.width - x;
     if (h > g.height - y) h = g.height - y;
     if (dy > h) dy = h;
     draw_begin();
-    U32* dst = g.fb + (U64)y * g.pitch;
-    const U32* src = g.fb + (U64)(y + dy) * g.pitch;
-    U64 n = (U64)(h - dy) * g.pitch;
-    for (U64 i = 0; i < n; i++) dst[i] = src[i];           // forward copy: dst is below src
-    display_fill(0, y + h - dy, g.width, dy, bg);
+    for (U32 r = 0; r + dy < h; r++) {                     // top to bottom: the source is below
+        U32* dst = g.fb + (U64)(y + r) * g.pitch + x;
+        const U32* src = dst + (U64)dy * g.pitch;
+        for (U32 c = 0; c < w; c++) dst[c] = src[c];
+    }
+    display_fill(x, y + h - dy, w, dy, bg);
+    draw_end();
+}
+
+U0 display_copy(U32 sx, U32 sy, U32 w, U32 h, U32 dx, U32 dy) {
+    if (!g.ready || sx + w > g.width || dx + w > g.width || sy + h > g.height || dy + h > g.height) return;
+    draw_begin();
+    // Rows in the order that never overwrites a source row before it is read,
+    // and within a row the same for the columns.
+    for (U32 i = 0; i < h; i++) {
+        U32 r = dy > sy ? h - 1 - i : i;
+        U32* dst = g.fb + (U64)(dy + r) * g.pitch + dx;
+        const U32* src = g.fb + (U64)(sy + r) * g.pitch + sx;
+        if (dst > src) for (U32 c = w; c-- > 0;) dst[c] = src[c];
+        else for (U32 c = 0; c < w; c++) dst[c] = src[c];
+    }
     draw_end();
 }
 
