@@ -34,7 +34,7 @@ make                     # yesos.elf
 make run                 # serial console (Ctrl-A X to quit), own yesos_disk.img, sound via PulseAudio
 make run AUDIO=none      # the same without sound (or AUDIO=pipewire, alsa)
 make run-gui             # the screen in a window (UI=gtk, or UI=sdl): type there or in the terminal
-make test                # tools/test_desktop.py, test_audio.py, test_display.py, test_input.py, test_window.py
+make test                # tools/test_*.py: desktop, audio, display, input, window, files, fileops
 ```
 
 `python3 tools/test_desktop.py` (17 checks): it boots as YesOS Desktop with the
@@ -208,12 +208,21 @@ Not yet: resizing, minimising.
   says when it has ended); any
   other file opens in a **viewer** window if it is text (no NUL byte, at
   most 1 MiB), else the status line says why not.
+- **File operations**, the name typed in the status line (Esc cancels):
+  **F5 copies** a file (to a name in the same folder, or a path such as
+  `sub/copy.txt`), **F2 renames** it, **Delete** deletes a file or an empty
+  folder after Enter, **F7 makes a folder**. A name that exists or is not
+  valid is refused. A rename on the RedSea disk gives the data a second
+  name, then removes the old one: cut in between, both names are left and
+  nothing is lost. Folders are not copied or renamed yet; a folder that is
+  not empty is not deleted (RedSea would leave its files behind).
 - The **viewer** shows the lines cut at its width (no wrapping), tabs to 8
   columns, control characters as `?`; Up/Down/Page Up/Page Down/Home/End
   scroll; its status line says which lines are shown.
 
 ```text
 Files       files [path]   files list
+            in the browser: F5 copy  F2 rename  Delete delete  F7 new folder  Esc cancel
 ```
 
 `python3 tools/test_files.py` (30 checks) puts a text file (tab, UTF-8, a
@@ -234,9 +243,16 @@ underrun, comes out bit for bit, and the browser says it has ended;
 while it plays, six of these checks fail. A tab width of 4 instead of
 8 in the viewer is caught (636 pixels).
 
-Limits: the viewer
-does not wrap lines; at most 64 entries per directory are listed; files
-cannot be copied, renamed or deleted from the browser yet.
+`python3 tools/test_fileops.py` (24 checks): copy, rename and delete with
+the keys through QMP, the listing and the files' contents after each step;
+a name that exists, a name with `/` for a rename, Delete then Esc, a folder
+that is not empty and renaming a folder are refused; a copy into a new
+folder, the folder emptied and deleted; the question in the status line on
+the screen pixel for pixel; `fsck` clean; after a reboot the disk holds
+what it should. A rename that keeps the old name makes 5 checks fail.
+
+Limits: the viewer does not wrap lines; at most 64 entries per directory
+are listed; folders are not copied or renamed.
 
 ## Keyboard and pointer (`src/input.c`)
 

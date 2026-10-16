@@ -8,6 +8,7 @@
 #include "hda.h"
 #include "vfs.h"
 #include "ramfs.h"
+#include "redsea_eml.h"
 #include "font.h"
 #include "kprintf.h"
 #include "memory.h"
@@ -20,7 +21,13 @@ typedef struct {
     Bool     up;                          // ".." shown first
     U32      sel, top;                    // in the shown list (".." included)
     char     msg[96];                     // status line; empty: path and count
+    U8       ask;                         // ASK_*: the status line is asking something
+    char     subject[VFS_MAX_FILENAME];   // the entry the question is about
+    Bool     subject_dir;
+    char     input[96];                   // the name being typed
 } Browser;
+
+enum { ASK_NONE, ASK_DELETE, ASK_RENAME, ASK_COPY, ASK_MKDIR };
 
 typedef struct {
     char  name[VFS_MAX_FILENAME];
@@ -93,8 +100,12 @@ static U0 browser_draw(Window* w) {
             cells(&w->content, w->cols - 1 - slen, r, size, slen, fg);
         }
     }
-    char st[VFS_MAX_PATH + 32];
-    if (b->msg[0]) StrNCpy(st, b->msg, sizeof(st));
+    char st[VFS_MAX_PATH + 160];
+    if (b->ask == ASK_DELETE) ksnprintf(st, sizeof(st), "Delete %s? Enter: yes, Esc: no", b->subject);
+    else if (b->ask == ASK_RENAME) ksnprintf(st, sizeof(st), "Rename %s to: %s_", b->subject, b->input);
+    else if (b->ask == ASK_COPY) ksnprintf(st, sizeof(st), "Copy %s to: %s_", b->subject, b->input);
+    else if (b->ask == ASK_MKDIR) ksnprintf(st, sizeof(st), "New folder: %s_", b->input);
+    else if (b->msg[0]) StrNCpy(st, b->msg, sizeof(st));
     else ksnprintf(st, sizeof(st), "%s  %u entries", b->path, (U64)b->n);
     status_line(w, st);
     finish(w, saved);
@@ -138,6 +149,8 @@ static Bool ends_with(const char* s, const char* suffix) {     // ASCII, any cas
 
 static Window* viewer_open(const char* path, const char* name, char* why, U32 why_max);
 static Bool browser_key(Window* w, U32 key);
+static U8* read_listed(const char* path, size_t* size);
+static U0 browser_select(Window* w, U32 i);
 
 // A sound started from a browser has ended: say so in that browser, if it
 // is still open.
@@ -194,10 +207,157 @@ static U0 browser_select(Window* w, U32 i) {
     browser_draw(w);
 }
 
+// ---- copy, rename, delete, new folder ---------------------------------------------------
+
+static VFSEntry s_tmp[FILES_MAX];          // a directory's listing, to see if it is empty
+
+// After an operation: the directory listed again, `select` selected if it
+// is there, the result in the status line.
+static U0 reload(Window* w, const char* select) {
+    Browser* b = (Browser*)w->data;
+    char msg[96];
+    StrNCpy(msg, b->msg, sizeof(msg));
+    U32 old = b->sel;
+    char path[VFS_MAX_PATH];
+    StrNCpy(path, b->path, sizeof(path));
+    browser_load(w, path);
+    U32 i = old < shown(b) ? old : (shown(b) ? shown(b) - 1 : 0);
+    for (U32 k = 0; select && k < b->n; k++)
+        if (StrCmp(b->e[k].name, select) == 0) i = k + (b->up ? 1 : 0);
+    browser_select(w, i);
+    StrNCpy(b->msg, msg, sizeof(b->msg));
+    browser_draw(w);
+}
+
+// The typed name as a path: absolute if it starts with '/', else in this directory.
+static Bool target(const Browser* b, char* out, U32 max, Bool allow_slash) {
+    const char* t = b->input;
+    if (!*t || StrCmp(t, ".") == 0 || StrCmp(t, "..") == 0) return FALSE;
+    for (const char* p = t; *p; p++) {
+        if (*p == '/' && !allow_slash) return FALSE;
+        if (p[0] == '.' && p[1] == '.' && (p == t || p[-1] == '/')) return FALSE;
+    }
+    if (t[0] == '/') StrNCpy(out, t, max);
+    else join(out, max, b->path, t);
+    return TRUE;
+}
+
+// Exactly this path (vfs_exists also looks for the bare name elsewhere).
+static Bool exists_exact(const char* path) {
+    if (StrNICmp(path, "/ram/", 5) == 0) return ramfs_exists(path + 5);
+    return redsea_eml_exists_path(path) || ramfs_exists(path + 1);
+}
+
+static const char* last_part(const char* path) {
+    const char* n = path;
+    for (const char* q = path; *q; q++) if (*q == '/' && q[1]) n = q + 1;
+    return n;
+}
+
+static U0 do_ask(Window* w) {
+    Browser* b = (Browser*)w->data;
+    U8 ask = b->ask;
+    b->ask = ASK_NONE;
+    char src[VFS_MAX_PATH], dst[VFS_MAX_PATH];
+    join(src, sizeof(src), b->path, b->subject);
+    const char* select = NULL;
+    if (ask == ASK_DELETE) {
+        Bool ok;
+        if (b->subject_dir && vfs_list_dir(src, s_tmp, FILES_MAX) > 0) {
+            ksnprintf(b->msg, sizeof(b->msg), "Not deleted: %s is not empty", b->subject);
+            reload(w, b->subject);
+            return;
+        }
+        ok = vfs_remove(src);
+        ksnprintf(b->msg, sizeof(b->msg), ok ? "%s deleted" : "%s could not be deleted", b->subject);
+        reload(w, NULL);
+        return;
+    }
+    if (!target(b, dst, sizeof(dst), ask == ASK_COPY)) {
+        ksnprintf(b->msg, sizeof(b->msg), "Not a valid name: %s", b->input);
+    } else if (exists_exact(dst)) {
+        ksnprintf(b->msg, sizeof(b->msg), "%s already exists", b->input);
+    } else if (ask == ASK_MKDIR) {
+        Bool ok = vfs_mkdir(dst);
+        ksnprintf(b->msg, sizeof(b->msg), ok ? "Folder %s made" : "Folder %s could not be made", b->input);
+        select = ok ? last_part(dst) : NULL;
+    } else if (b->subject_dir) {
+        ksnprintf(b->msg, sizeof(b->msg), "Folders cannot be %s yet", ask == ASK_COPY ? "copied" : "renamed");
+    } else if (ask == ASK_COPY) {
+        size_t size = 0;
+        U8* data = read_listed(src, &size);
+        Bool ok = data && vfs_write_file(dst, data, size);
+        if (data) Free(data);
+        ksnprintf(b->msg, sizeof(b->msg), ok ? "%s copied to %s" : "%s could not be copied to %s", b->subject, b->input);
+        select = ok ? last_part(dst) : NULL;
+    } else {
+        // Rename on the RedSea disk: a second name for the same data, then the
+        // old name removed. Cut in between, both names are left, nothing lost.
+        Bool ok = StrNICmp(src, "/ram/", 5) != 0 && redsea_eml_link(src + 1, dst + 1, 0, 0) &&
+                  redsea_eml_delete_file(src + 1);
+        ksnprintf(b->msg, sizeof(b->msg), ok ? "%s renamed to %s" : "%s could not be renamed to %s", b->subject, b->input);
+        select = ok ? last_part(dst) : b->subject;
+    }
+    reload(w, select);
+}
+
+// A key while the status line is asking something.
+static U0 ask_key(Window* w, U32 key) {
+    Browser* b = (Browser*)w->data;
+    if (key == WKEY_ESCAPE || (b->ask == ASK_DELETE && key != WKEY_ENTER)) {
+        b->ask = ASK_NONE;
+        StrNCpy(b->msg, "Cancelled", sizeof(b->msg));
+    } else if (key == WKEY_ENTER) {
+        do_ask(w);
+        return;
+    } else if (key == WKEY_BACKSPACE) {
+        U32 n = (U32)StrLen(b->input);
+        while (n > 0 && ((U8)b->input[n - 1] & 0xC0) == 0x80) n--;
+        if (n > 0) n--;
+        b->input[n] = '\0';
+    } else if (key >= 32 && key < 0x110000 && key != 127) {
+        char u[4];
+        U32 k = key < 0x80 ? 1 : key < 0x800 ? 2 : 3;
+        if (k == 1) u[0] = (char)key;
+        else if (k == 2) { u[0] = (char)(0xC0 | (key >> 6)); u[1] = (char)(0x80 | (key & 0x3F)); }
+        else { u[0] = (char)(0xE0 | (key >> 12)); u[1] = (char)(0x80 | ((key >> 6) & 0x3F)); u[2] = (char)(0x80 | (key & 0x3F)); }
+        U32 n = (U32)StrLen(b->input);
+        if (n + k < sizeof(b->input)) {
+            MemCpy(b->input + n, u, k);
+            b->input[n + k] = '\0';
+        }
+    }
+    browser_draw(w);
+}
+
+static U0 ask(Window* w, U8 what) {
+    Browser* b = (Browser*)w->data;
+    b->input[0] = '\0';
+    b->subject[0] = '\0';
+    b->subject_dir = FALSE;
+    if (what != ASK_MKDIR) {
+        if (shown(b) == 0 || (b->up && b->sel == 0)) return;     // nothing selected, or ".."
+        const VFSEntry* e = &b->e[b->sel - (b->up ? 1 : 0)];
+        StrNCpy(b->subject, e->name, sizeof(b->subject));
+        b->subject_dir = e->type == VFS_TYPE_DIR;
+        if (what != ASK_DELETE) StrNCpy(b->input, e->name, sizeof(b->input));
+    }
+    b->ask = what;
+    browser_draw(w);
+}
+
 static Bool browser_key(Window* w, U32 key) {
     Browser* b = (Browser*)w->data;
     U32 page = w->rows - 1, total = shown(b);
+    if (b->ask) {
+        ask_key(w, key);
+        return TRUE;
+    }
     switch (key) {
+    case WKEY_DELETE:   ask(w, ASK_DELETE); break;
+    case WKEY_F2:       ask(w, ASK_RENAME); break;
+    case WKEY_F5:       ask(w, ASK_COPY); break;
+    case WKEY_F7:       ask(w, ASK_MKDIR); break;
     case WKEY_UP:       if (b->sel > 0) browser_select(w, b->sel - 1); break;
     case WKEY_DOWN:     browser_select(w, b->sel + 1); break;
     case WKEY_HOME:     browser_select(w, 0); break;
@@ -222,7 +382,11 @@ static U0 browser_click(Window* w, I32 x, I32 y, Bool dbl) {
     (void)x;
     Browser* b = (Browser*)w->data;
     U32 row = (U32)y / FONT_HEIGHT;
-    if (row >= w->rows - 1 || b->top + row >= shown(b)) return;
+    if (b->ask) {                             // a press in the list cancels the question
+        b->ask = ASK_NONE;
+        StrNCpy(b->msg, "Cancelled", sizeof(b->msg));
+    }
+    if (row >= w->rows - 1 || b->top + row >= shown(b)) { browser_draw(w); return; }
     U32 i = b->top + row;
     if (dbl && i == b->sel) browser_open(w);
     else browser_select(w, i);
@@ -420,7 +584,8 @@ static Bool files_run(const char* cmd) {
 }
 
 static U0 files_help(U0) {
-    kprintf("  Files (a browser window: arrows, Enter or double click to open, Backspace to go up)\n");
+    kprintf("  Files (a browser window: arrows, Enter or double click to open, Backspace to go up,\n");
+    kprintf("         F5 copy, F2 rename, Delete delete, F7 new folder, Esc cancels)\n");
     kprintf("    files [path]   files list\n");
 }
 

@@ -93,6 +93,10 @@
 #define KEY_DOWN                  108
 #define KEY_DELETE                111
 #define KEY_PAGEUP                104
+#define KEY_ESC                   1
+#define KEY_F2                    60
+#define KEY_F5                    63
+#define KEY_F7                    65
 #define KEY_PAGEDOWN              109
 
 #define LAYOUT_FILE               "/input.cfg"
@@ -229,6 +233,10 @@ static U0 key_press(U16 code) {
     case KEY_DELETE:   send_key(WKEY_DELETE, "\x1b[3~"); return;
     case KEY_PAGEUP:   send_key(WKEY_PAGEUP, ""); return;
     case KEY_PAGEDOWN: send_key(WKEY_PAGEDOWN, ""); return;
+    case KEY_ESC:      send_key(WKEY_ESCAPE, ""); return;   // nothing for the console
+    case KEY_F2:       send_key(WKEY_F2, ""); return;
+    case KEY_F5:       send_key(WKEY_F5, ""); return;
+    case KEY_F7:       send_key(WKEY_F7, ""); return;
     default: break;
     }
     if (s_ctrl || s_alt || code >= 128) return;

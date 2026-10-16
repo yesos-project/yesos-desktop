@@ -46,6 +46,10 @@
 #define WKEY_DELETE     0x110009
 #define WKEY_PAGEUP     0x11000A
 #define WKEY_PAGEDOWN   0x11000B
+#define WKEY_ESCAPE     0x11000C
+#define WKEY_F2         0x11000D
+#define WKEY_F5         0x11000E
+#define WKEY_F7         0x11000F
 
 #define DOUBLE_CLICK_MS 400
 
