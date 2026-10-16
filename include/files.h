@@ -9,8 +9,8 @@
 // below the root, then the entries as the VFS sorts them; a selection bar,
 // a status line. Up/Down/Home/End/PageUp/PageDown move, Enter or a double
 // click opens, Backspace goes up. A directory is entered, a .wav file is
-// played (the desktop waits while it plays), any other file is shown in a
-// viewer window if it is text (no NUL byte, at most FILES_VIEW_MAX bytes).
+// played in the background (the desktop keeps working, the status line
+// says when it has ended), any other file is shown in a viewer window if it is text (no NUL byte, at most FILES_VIEW_MAX bytes).
 // Viewer: the lines cut at the window's width, tabs to 8 columns,
 // Up/Down/PageUp/PageDown/Home/End scroll.
 

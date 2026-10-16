@@ -283,6 +283,7 @@ static Bool stream_reset(U0) {
 
 Bool hda_prepare(U0) {
     if (!g.ready) return FALSE;
+    hda_cancel();
     if (g.playing) hda_stop();
     if (!stream_reset()) {
         kprintf("[HDA] stream reset timed out\n");
@@ -332,10 +333,23 @@ U0 hda_run(U0) {
     io_fence();
     mmio_write32(s_sd + SD_CTL, ((U32)STREAM_TAG << 20) | SD_CTL_RUN);
     g.running = TRUE;
+    g.last_pump_ms = timer_get_uptime_ms();
 }
 
 U0 hda_pump(U0) {
     if (!g.running) return;
+    // Held up for longer than the ring lasts: the position wrapped around an
+    // unknown number of times and old samples were played. Count it and
+    // start again from what the DMA plays now.
+    U64 now = timer_get_uptime_ms();
+    if (now - g.last_pump_ms > (U64)(HDA_RING_FRAMES - WRITE_GUARD) * 1000 / g.rate) {
+        g.underruns++;
+        g.last_lpib = mmio_read32(s_sd + SD_LPIB) % RING_BYTES;
+        g.frames_written = g.frames_played;
+        g.last_pump_ms = now;
+        return;
+    }
+    g.last_pump_ms = now;
     U32 lpib = mmio_read32(s_sd + SD_LPIB) % RING_BYTES;
     U32 delta = (lpib + RING_BYTES - g.last_lpib) % RING_BYTES;
     g.last_lpib = lpib;
@@ -406,6 +420,69 @@ U64 hda_play(HdaFill fill, U0* ctx) {
     }
     hda_stop();
     return total;
+}
+
+// ---- background playback --------------------------------------------------------
+
+static struct {
+    Bool    active, ended;
+    HdaFill fill;
+    U0*     ctx;
+    HdaDone done;
+    I16     block[2 * HDA_FILL_FRAMES];
+    U32     have, off;                  // frames in block, frames of it already written
+    U64     total, end, deadline_ms;
+} s_bg;
+
+Bool hda_busy(U0) { return s_bg.active; }
+
+static U0 bg_finish(Bool cancelled) {
+    hda_stop();
+    s_bg.active = FALSE;
+    if (s_bg.done) s_bg.done(s_bg.total, cancelled, s_bg.ctx);
+}
+
+U0 hda_cancel(U0) {
+    if (s_bg.active) bg_finish(TRUE);
+}
+
+U0 hda_service(U0) {
+    if (!s_bg.active) return;
+    while (!s_bg.ended) {
+        if (s_bg.off == s_bg.have) {
+            s_bg.have = s_bg.fill(s_bg.block, HDA_FILL_FRAMES, s_bg.ctx);
+            s_bg.off = 0;
+            if (s_bg.have == 0) {
+                s_bg.ended = TRUE;
+                s_bg.end = g.frames_written;
+                s_bg.deadline_ms = timer_get_uptime_ms() + 2000 + (U64)HDA_RING_FRAMES * 1000 / g.rate;
+                hda_run();                      // a short sound may not have filled the ring
+                MemSet(s_bg.block, 0, sizeof(s_bg.block));
+                break;
+            }
+            s_bg.total += s_bg.have;
+        }
+        U32 w = hda_write(s_bg.block + 2 * s_bg.off, s_bg.have - s_bg.off);
+        s_bg.off += w;
+        if (!w) {
+            hda_run();                          // the ring is full: playing (or still playing)
+            return;
+        }
+    }
+    // The producer is done: silence after the end until it has played out.
+    while (hda_write(s_bg.block, HDA_FILL_FRAMES)) {}
+    if (g.frames_played >= s_bg.end + 2048 || timer_get_uptime_ms() > s_bg.deadline_ms) bg_finish(FALSE);
+}
+
+Bool hda_start(HdaFill fill, U0* ctx, HdaDone done) {
+    if (!g.ready || !fill || !hda_prepare()) return FALSE;
+    MemSet(&s_bg, 0, sizeof(s_bg));
+    s_bg.fill = fill;
+    s_bg.ctx = ctx;
+    s_bg.done = done;
+    s_bg.active = TRUE;
+    hda_service();                              // fill the ring now
+    return TRUE;
 }
 
 typedef struct {

@@ -68,9 +68,19 @@ removes a whole ñ), and fsck is clean.
   chunk size against the file size and refuses what it cannot play (other
   sample sizes, compressed formats, rates the codec lacks) with a message.
   Limit: the file is read into memory whole (heap 128 MiB).
+- **In the background** (`audio start <file>`, and the file browser): the
+  call returns at once and the main loop keeps the ring filled (it runs
+  every millisecond; the ring lasts 341 ms), so the desktop keeps working
+  while it plays; the end is reported on the console and in the browser.
+  `audio stop` stops it. One sound at a time: a new one, a tone or
+  `audio play` stops the one in the background. If the main loop is held
+  up for longer than the ring (a long command), the DMA plays old samples:
+  that is detected from the clock and counted as an underrun.
+  `audio play` and `audio tone` still wait until they have played.
 
 ```text
 Audio       audio [status]   audio tone <Hz> <ms> [level %]   audio play <file.wav>
+            audio start <file.wav>   audio stop
 ```
 
 `python3 tools/test_audio.py` (38 checks) boots with QEMU's `intel-hda` and
@@ -194,7 +204,8 @@ Not yet: resizing, minimising.
   the right, a selection bar and a status line.
 - Up/Down/Home/End/Page Up/Page Down move, **Enter or a double click
   opens**, Backspace goes up. A directory is entered; a **`.wav` file is
-  played** (`audio play`'s code; the desktop waits while it plays); any
+  played in the background** (the desktop keeps working; the status line
+  says when it has ended); any
   other file opens in a **viewer** window if it is text (no NUL byte, at
   most 1 MiB), else the status line says why not.
 - The **viewer** shows the lines cut at its width (no wrapping), tabs to 8
@@ -205,7 +216,7 @@ Not yet: resizing, minimising.
 Files       files [path]   files list
 ```
 
-`python3 tools/test_files.py` (22 checks) puts a text file (tab, UTF-8, a
+`python3 tools/test_files.py` (30 checks) puts a text file (tab, UTF-8, a
 control character, a long line, 60 lines), a binary file and a WAV file on
 the disk, makes a directory with a text file from the console, and drives
 everything with keys and tablet events through QMP: the browser at `/`,
@@ -215,10 +226,15 @@ scrolled (Page Down, End, Up) — each screen **pixel for pixel** against
 the test's models of the windows, the browser and the viewer. Letters
 typed with the browser focused do not reach the console, and do after a
 press on the console; `BIN.DAT` is refused as not text; `TONE.WAV` plays
-and comes out of the recording **bit for bit**. A tab width of 4 instead of
+and comes out of the recording **bit for bit**. A 3-second `LONG.WAV` is
+started from the browser and, while it is still playing, the browser
+answers two keys (the screen is compared pixel for pixel); it ends with no
+underrun, comes out bit for bit, and the browser says it has ended;
+`audio stop` stops it early. With the browser switched back to waiting
+while it plays, six of these checks fail. A tab width of 4 instead of
 8 in the viewer is caught (636 pixels).
 
-Limits: the desktop does nothing else while a WAV file plays; the viewer
+Limits: the viewer
 does not wrap lines; at most 64 entries per directory are listed; files
 cannot be copied, renamed or deleted from the browser yet.
 

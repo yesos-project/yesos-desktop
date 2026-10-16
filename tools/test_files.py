@@ -6,8 +6,9 @@ Files are put on the RedSea disk first (a text file with tabs, UTF-8, a
 control character and a long line; a binary file; a WAV file) and from the
 console (a directory with a text file). Through QMP the test opens the
 browser, moves with the keys, enters a directory, opens text files with
-Enter and with a double click, scrolls a viewer, plays the WAV file (it must
-come out of the recording bit for bit), and checks that keys go to the
+Enter and with a double click, scrolls a viewer, plays WAV files in the
+background (they must come out of the recording bit for bit, and the
+browser must answer keys while a 3-second one plays), and checks that keys go to the
 focused window and not to the console. Screenshots are compared pixel for
 pixel with the screen composed by the test (test_window's model of the
 windows, plus models of the browser and the viewer). Non-zero exit status
@@ -195,8 +196,10 @@ def main():
     rng = np.random.default_rng(3)
     tone = (rng.integers(-20000, 20000, (12000, 2))).astype(np.int16)
     tone[0] = (12345, -23456)
+    song = (rng.integers(-12000, 12000, (144000, 2))).astype(np.int16)      # 3 s
+    song[0] = (23456, -12345)
     files = {"LONG.TXT": long_txt, "BIN.DAT": b"\x7fELF\x00\x01binary\x00data",
-             "TONE.WAV": ta.wav_bytes(48000, 2, tone)}
+             "TONE.WAV": ta.wav_bytes(48000, 2, tone), "LONG.WAV": ta.wav_bytes(48000, 2, song)}
     for name, data in files.items():
         check(redsea_injector.inject_bytes(disk, data, name), f"{name} ({len(data)} bytes) put on the disk")
 
@@ -314,11 +317,55 @@ def main():
             vm.tap("down")
         mark = len(vm.output())
         vm.tap("ret")
-        check(vm.wait_for("[AUDIO] play done: 12000 frames, 0 underrun(s)", 20, mark), "Enter on TONE.WAV plays it")
+        check(vm.wait_for("[AUDIO] play done: /TONE.WAV, 12000 frames, 0 underrun(s)", 20, mark),
+              "Enter on TONE.WAV plays it")
         time.sleep(0.5)
         head, _ = listing(vm)
         check(head is not None and head.group(5) == "TONE.WAV: played, 12000 frames",
               f"status after playing ({head.group(5) if head else '?'})")
+
+        # a 3-second sound in the background: the browser keeps answering
+        vm.send("term off", 1)                              # the console stops changing the screen
+        vm.tap("home")
+        for _ in range(names.index("LONG.WAV")):
+            vm.tap("down")
+        mark = len(vm.output())
+        t0 = time.time()
+        vm.tap("ret")
+        vm.tap("up")                                        # keys while it plays
+        vm.tap("up")
+        busy = time.time() - t0
+        sel = names.index("LONG.WAV") - 2
+        out_now = vm.since(mark)
+        check("[AUDIO] start /LONG.WAV: 48000 Hz, stereo, 144000 frames (3.000 s), in the background" in out_now,
+              "Enter on LONG.WAV starts it in the background")
+        shotimg = vm.screendump(shot)
+        busy = time.time() - t0
+        playing = "play done: /LONG.WAV" not in vm.since(mark)
+        check(playing, f"still playing when the screen is taken ({busy:.2f} s after Enter)")
+        # The console as the screen shows it: drawn up to `term off`.
+        t = ti.Terminal(tw.COLS * 8, tw.ROWS * 16)
+        raw = vm.raw()
+        for b in raw[s.cut:raw.index(b"[TERM] off", s.cut)]:
+            t.put(b)
+        con.content = t.picture()
+        br.content = browser_picture("/", root, sel, 0, "")       # moving clears the status message
+        # stacking: console pressed (on top), then `window front 1`
+        compare(shotimg, tw.compose(W, H, [v2, con, br], 1, s.ptr),
+                "while it plays: the browser answered two keys (selection up twice)")
+        check(vm.wait_for("[AUDIO] play done: /LONG.WAV, 144000 frames, 0 underrun(s)", 20, mark),
+              "LONG.WAV played to the end with no underrun")
+        time.sleep(0.5)
+        head, _ = listing(vm)
+        check(head is not None and head.group(5) == "LONG.WAV: played, 144000 frames",
+              f"the browser says it has ended ({head.group(5) if head else '?'})")
+        vm.send("term on", 1)
+
+        m = vm.send("audio start /LONG.WAV", 1)
+        time.sleep(0.5)
+        m = vm.send("audio stop", 1)
+        st = re.search(r"play stopped: /LONG.WAV after (\d+) frames", vm.since(m))
+        check(st is not None and 0 < int(st.group(1)) < 144000, f"audio stop: stopped early ({st.group(0) if st else '?'})")
 
         m = vm.send("window close 1", 1)
         check("[WINDOW] 1 closed" in vm.since(m), "the browser closes (its memory freed by its program)")
@@ -329,6 +376,7 @@ def main():
         vm.quit()
     rec = ta.read_wav(wav)
     check(ta.find_exact(rec, tone) >= 0, "TONE.WAV comes out of the recording bit for bit")
+    check(ta.find_exact(rec, song) >= 0, "LONG.WAV, played in the background, comes out bit for bit")
     shutil.rmtree(tmpdir, ignore_errors=True)
 
     print()

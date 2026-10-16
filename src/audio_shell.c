@@ -64,6 +64,64 @@ const char* audio_play_file(const char* name, U64* frames_played) {
     return why;
 }
 
+// ---- background: `audio start <file>`, the file browser ---------------------------------
+
+typedef struct {
+    WavCtx      c;
+    U8*         data;                   // the whole file (c.w.samples points into it)
+    char        path[128];
+    AudioDoneFn done;
+    U0*         ctx;
+} BgPlay;
+
+static BgPlay* s_bg;                    // the sound playing in the background, if any
+
+static U0 bg_done(U64 frames, Bool cancelled, U0* p) {
+    BgPlay* b = (BgPlay*)p;
+    if (cancelled) kprintf("[AUDIO] play stopped: %s after %u frames\n", b->path, (U32)frames);
+    else kprintf("[AUDIO] play done: %s, %u frames, %u underrun(s)\n", b->path, (U32)frames,
+                 (U32)hda_state()->underruns);
+    if (s_bg == b) s_bg = NULL;
+    AudioDoneFn done = b->done;
+    U0* ctx = b->ctx;
+    char path[128];
+    StrNCpy(path, b->path, sizeof(path));
+    Free(b->data);
+    Free(b);
+    if (done) done(path, frames, cancelled, ctx);
+}
+
+const char* audio_start_file(const char* name, AudioDoneFn done, U0* ctx) {
+    if (!hda_state()->ready) return "no HD Audio output";
+    if (!redsea_eml_is_mounted()) return "no RedSea volume mounted";
+    hda_cancel();                       // one sound at a time; the rate can only change when stopped
+    size_t size = 0;
+    U8* data = redsea_eml_read_file_path(name, &size);
+    if (!data) return "no such file";
+    BgPlay* b = (BgPlay*)Malloc(sizeof(BgPlay));
+    if (!b) { Free(data); return "out of memory"; }
+    MemSet(b, 0, sizeof(*b));
+    const char* why = wav_parse(data, size, &b->c.w);
+    if (!why && !hda_set_rate(b->c.w.rate)) why = "a rate this codec does not support";
+    if (why) { Free(data); Free(b); return why; }
+    b->data = data;
+    StrNCpy(b->path, name, sizeof(b->path));
+    b->path[sizeof(b->path) - 1] = '\0';
+    b->done = done;
+    b->ctx = ctx;
+    s_bg = b;
+    U32 ms = (U32)((U64)b->c.w.frames * 1000 / b->c.w.rate);
+    kprintf("[AUDIO] start %s: %u Hz, %s, %u frames (%u.%03u s), in the background\n", name, b->c.w.rate,
+            b->c.w.channels == 2 ? "stereo" : "mono", b->c.w.frames, ms / 1000, ms % 1000);
+    if (!hda_start(wav_fill, &b->c, bg_done)) {
+        s_bg = NULL;
+        Free(data);
+        Free(b);
+        return "the stream could not be started";
+    }
+    return NULL;
+}
+
 static U0 audio_status(U0) {
     HdaState* s = hda_state();
     if (!s->present) {
@@ -80,6 +138,7 @@ static U0 audio_status(U0) {
     for (U32 i = 0; i < sizeof(rates) / sizeof(rates[0]); i++)
         if (hda_rate_supported(rates[i])) kprintf(" %u", rates[i]);
     kprintf(" Hz\n");
+    if (s_bg) kprintf("  Background: playing %s (frame %u of %u)\n", s_bg->path, s_bg->c.next, s_bg->c.w.frames);
     kprintf("  Frames : %u written, %u played, %u underrun(s)\n",
             (U32)s->frames_written, (U32)s->frames_played, (U32)s->underruns);
     kprintf("  Pisano : period %u steps (checked at init: %s), step %u, %u full period(s), F=(%u, %u)\n",
@@ -112,6 +171,18 @@ static Bool audio_run(const char* cmd) {
         }
         return TRUE;
     }
+    if (shell_is_prefix("audio start ", cmd)) {
+        const char* p = cmd + 12;
+        while (*p == ' ') p++;
+        const char* why = *p ? audio_start_file(p, NULL, NULL) : "usage: audio start <file.wav>";
+        if (why) kprintf("audio: %s: %s\n", p, why);
+        return TRUE;
+    }
+    if (StrCmp(cmd, "audio stop") == 0) {
+        if (hda_busy()) hda_cancel();
+        else kprintf("audio: nothing is playing in the background\n");
+        return TRUE;
+    }
     if (shell_is_prefix("audio play ", cmd)) {
         const char* p = cmd + 11;
         while (*p == ' ') p++;
@@ -120,7 +191,8 @@ static Bool audio_run(const char* cmd) {
         return TRUE;
     }
     if (shell_is_prefix("audio", cmd)) {
-        kprintf("usage: audio [status] | audio tone <Hz> <ms> [level %%] | audio play <file.wav>\n");
+        kprintf("usage: audio [status] | audio tone <Hz> <ms> [level %%] | audio play <file.wav>\n"
+                "       audio start <file.wav> (in the background) | audio stop\n");
         return TRUE;
     }
     return FALSE;
@@ -129,6 +201,7 @@ static Bool audio_run(const char* cmd) {
 static U0 audio_help(U0) {
     kprintf("  Audio\n");
     kprintf("    audio [status]   audio tone <Hz> <ms> [level %%]   audio play <file.wav>\n");
+    kprintf("    audio start <file.wav>   audio stop   (in the background: the desktop keeps working)\n");
 }
 
 static const ShellExtension s_audio_shell = { audio_run, audio_help, NULL, NULL };

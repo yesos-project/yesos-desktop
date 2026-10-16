@@ -137,6 +137,20 @@ static Bool ends_with(const char* s, const char* suffix) {     // ASCII, any cas
 }
 
 static Window* viewer_open(const char* path, const char* name, char* why, U32 why_max);
+static Bool browser_key(Window* w, U32 key);
+
+// A sound started from a browser has ended: say so in that browser, if it
+// is still open.
+static U0 browser_audio_done(const char* path, U64 frames, Bool stopped, U0* ctx) {
+    Window* w = desktop_window((U32)(uintptr_t)ctx);
+    if (!w || w->on_key != browser_key) return;
+    Browser* b = (Browser*)w->data;
+    const char* name = path;
+    for (const char* q = path; *q; q++) if (*q == '/') name = q + 1;
+    if (stopped) ksnprintf(b->msg, sizeof(b->msg), "%s: stopped after %u frames", name, frames);
+    else ksnprintf(b->msg, sizeof(b->msg), "%s: played, %u frames", name, frames);
+    browser_draw(w);
+}
 
 static U0 browser_open(Window* w) {
     Browser* b = (Browser*)w->data;
@@ -154,12 +168,10 @@ static U0 browser_open(Window* w) {
     if (e->type == VFS_TYPE_DIR) {
         browser_load(w, p);
     } else if (ends_with(e->name, ".wav")) {
-        ksnprintf(b->msg, sizeof(b->msg), "Playing %s ...", e->name);
-        browser_draw(w);
-        U64 frames = 0;
-        const char* why = audio_play_file(p, &frames);
+        // In the background: the browser and the rest of the desktop keep working.
+        const char* why = audio_start_file(p, browser_audio_done, (U0*)(uintptr_t)w->id);
         if (why) ksnprintf(b->msg, sizeof(b->msg), "%s: %s", e->name, why);
-        else ksnprintf(b->msg, sizeof(b->msg), "%s: played, %u frames", e->name, frames);
+        else ksnprintf(b->msg, sizeof(b->msg), "Playing %s", e->name);
         browser_draw(w);
     } else {
         char why[64];

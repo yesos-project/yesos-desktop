@@ -52,5 +52,6 @@ U0 product_boot_summary(U0) {
 }
 
 U0 product_poll(U0) {
+    hda_service();                      // keep a background sound's ring filled
     input_poll();
 }
