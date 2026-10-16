@@ -92,6 +92,8 @@
 #define KEY_END                   107
 #define KEY_DOWN                  108
 #define KEY_DELETE                111
+#define KEY_PAGEUP                104
+#define KEY_PAGEDOWN              109
 
 #define LAYOUT_FILE               "/input.cfg"
 
@@ -179,18 +181,22 @@ static Bool s_shift_l, s_shift_r, s_ctrl, s_alt, s_altgr, s_caps;
 static U16  s_dead;                 // pending dead key, 0 if none
 
 static U0 type_cp(U32 cp) {
+    g.chars_typed++;
+    if (desktop_key(cp)) return;                    // the focused window's program took it
     char buf[4];
     U32 n;
     if (cp < 0x80) { buf[0] = (char)cp; n = 1; }
     else if (cp < 0x800) { buf[0] = (char)(0xC0 | (cp >> 6)); buf[1] = (char)(0x80 | (cp & 0x3F)); n = 2; }
     else { buf[0] = (char)(0xE0 | (cp >> 12)); buf[1] = (char)(0x80 | ((cp >> 6) & 0x3F)); buf[2] = (char)(0x80 | (cp & 0x3F)); n = 3; }
     for (U32 i = 0; i < n; i++) shell_process_char(buf[i]);
-    g.chars_typed++;
 }
 
-static U0 send_seq(const char* s) {
+// A key that is not a character: to the focused window's program if it
+// takes it, else to the console (as a character or an escape sequence).
+static U0 send_key(U32 wkey, const char* console) {
     s_dead = 0;
-    while (*s) shell_process_char(*s++);
+    if (desktop_key(wkey)) return;
+    while (*console) shell_process_char(*console++);
 }
 
 static U32 compose(U16 dead, U32 cp) {
@@ -211,16 +217,18 @@ static U0 key_press(U16 code) {
     case KEY_LEFTALT:    s_alt = TRUE; return;
     case KEY_RIGHTALT:   s_altgr = TRUE; return;
     case KEY_CAPSLOCK:   s_caps = !s_caps; return;
-    case KEY_ENTER: case KEY_KPENTER: s_dead = 0; shell_process_char('\r'); return;
-    case KEY_BACKSPACE:  s_dead = 0; shell_process_char('\b'); return;
-    // Editing keys: the escape sequences a terminal sends (the shell edits the line).
-    case KEY_UP:     send_seq("\x1b[A"); return;
-    case KEY_DOWN:   send_seq("\x1b[B"); return;
-    case KEY_RIGHT:  send_seq("\x1b[C"); return;
-    case KEY_LEFT:   send_seq("\x1b[D"); return;
-    case KEY_HOME:   send_seq("\x1b[H"); return;
-    case KEY_END:    send_seq("\x1b[F"); return;
-    case KEY_DELETE: send_seq("\x1b[3~"); return;
+    case KEY_ENTER: case KEY_KPENTER: send_key(WKEY_ENTER, "\r"); return;
+    case KEY_BACKSPACE:  send_key(WKEY_BACKSPACE, "\b"); return;
+    // Editing keys: for the console, the escape sequences a terminal sends.
+    case KEY_UP:       send_key(WKEY_UP, "\x1b[A"); return;
+    case KEY_DOWN:     send_key(WKEY_DOWN, "\x1b[B"); return;
+    case KEY_RIGHT:    send_key(WKEY_RIGHT, "\x1b[C"); return;
+    case KEY_LEFT:     send_key(WKEY_LEFT, "\x1b[D"); return;
+    case KEY_HOME:     send_key(WKEY_HOME, "\x1b[H"); return;
+    case KEY_END:      send_key(WKEY_END, "\x1b[F"); return;
+    case KEY_DELETE:   send_key(WKEY_DELETE, "\x1b[3~"); return;
+    case KEY_PAGEUP:   send_key(WKEY_PAGEUP, ""); return;
+    case KEY_PAGEDOWN: send_key(WKEY_PAGEDOWN, ""); return;
     default: break;
     }
     if (s_ctrl || s_alt || code >= 128) return;

@@ -6,10 +6,11 @@ submodule): Machine mode only, a locked Z3-proven PMP, an integer-only kernel
 
 Today it is the core, its serial console, the RedSea v4 disk, **HD Audio
 output** (including WAV files played from the disk), a **framebuffer** with
-a **desktop** of overlapping windows (the console in one of them), a
+a **desktop** of overlapping windows (the console, a **file browser** and a
+text viewer), a
 **virtio keyboard and tablet** (US or Spanish layout): no network services;
-of the core's optional modules only `gfx` and `lineedit`. Features (a file
-browser, apps in PMP cells) are added here one at a time, each with its own
+of the core's optional modules only `gfx` and `lineedit`. Features (apps in
+PMP cells, more programs) are added here one at a time, each with its own
 tests, brought over piece by piece from the old desktop experiments in
 `yesos-lab`.
 
@@ -154,7 +155,8 @@ Terminal    term [status]   term on   term off   term clear
 - A **press** on a window brings it to the front and gives it the focus
   (its title bar turns blue; the others' are grey). Its **title bar drags**
   it; the **box** at the right of the title bar closes it. Windows always
-  stay whole on the screen. Keys still go to the console.
+  stay whole on the screen. Keys go to the focused window if its program
+  takes them (the browser and the viewer do), else to the console.
 - `desktop off` gives the whole screen to the console; `desktop on` puts
   the windows back. A mode change lays everything out again.
 
@@ -182,8 +184,43 @@ contents drawn straight onto the screen instead of composed (the covered
 console check fails, 4 064 pixels); the grey of a title bar one step off
 (5 comparisons fail).
 
-Not yet: resizing, minimising, keys for windows other than the console,
-windows with their own programs (the file browser is next).
+Not yet: resizing, minimising.
+
+## File browser and viewer (`src/files.c`) — windows, stage 3
+
+- `files [path]` opens a **browser** window on a directory of the RedSea
+  disk (through the VFS, which also shows the RAM file system in the same
+  tree): `..` first below the root, then the entries, sizes of files on
+  the right, a selection bar and a status line.
+- Up/Down/Home/End/Page Up/Page Down move, **Enter or a double click
+  opens**, Backspace goes up. A directory is entered; a **`.wav` file is
+  played** (`audio play`'s code; the desktop waits while it plays); any
+  other file opens in a **viewer** window if it is text (no NUL byte, at
+  most 1 MiB), else the status line says why not.
+- The **viewer** shows the lines cut at its width (no wrapping), tabs to 8
+  columns, control characters as `?`; Up/Down/Page Up/Page Down/Home/End
+  scroll; its status line says which lines are shown.
+
+```text
+Files       files [path]   files list
+```
+
+`python3 tools/test_files.py` (22 checks) puts a text file (tab, UTF-8, a
+control character, a long line, 60 lines), a binary file and a WAV file on
+the disk, makes a directory with a text file from the console, and drives
+everything with keys and tablet events through QMP: the browser at `/`,
+`docs/` entered with Enter, `hola.txt` opened, the viewer closed by its
+box, Backspace back to `/`, `LONG.TXT` opened with a double click and
+scrolled (Page Down, End, Up) — each screen **pixel for pixel** against
+the test's models of the windows, the browser and the viewer. Letters
+typed with the browser focused do not reach the console, and do after a
+press on the console; `BIN.DAT` is refused as not text; `TONE.WAV` plays
+and comes out of the recording **bit for bit**. A tab width of 4 instead of
+8 in the viewer is caught (636 pixels).
+
+Limits: the desktop does nothing else while a WAV file plays; the viewer
+does not wrap lines; at most 64 entries per directory are listed; files
+cannot be copied, renamed or deleted from the browser yet.
 
 ## Keyboard and pointer (`src/input.c`)
 

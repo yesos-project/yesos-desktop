@@ -9,12 +9,16 @@
 #include "kprintf.h"
 #include "memory.h"
 #include "shell.h"
+#include "timer.h"
 
 static DesktopState g;
 static Window s_win[WIN_MAX];
 static U32    s_z[WIN_MAX];                 // indices into s_win, bottom to top
 static U32    s_nz;
 static U32    s_last_buttons;
+static U32    s_click_id = 0xFFFFFFFF;      // the last press in a window's contents, for double clicks
+static I32    s_click_x, s_click_y;
+static U64    s_click_ms;
 
 DesktopState* desktop_state(U0) { return &g; }
 
@@ -122,6 +126,22 @@ static Bool alloc_content(Window* w) {
 
 // ---- windows ---------------------------------------------------------------------
 
+U0 desktop_show(Window* w) {
+    if (w && w->used) compose(w->x + WIN_BORDER, w->y + WIN_BORDER + WIN_TITLE_H, w->content.w, w->content.h);
+}
+
+U0 desktop_set_title(Window* w, const char* title) {
+    StrNCpy(w->title, title, WIN_TITLE_MAX);
+    w->title[WIN_TITLE_MAX - 1] = '\0';
+    if (w->used) compose_title(w);
+}
+
+Bool desktop_key(U32 key) {
+    if (!g.on) return FALSE;
+    Window* w = desktop_window(g.focus);
+    return w && w->on_key && w->on_key(w, key);
+}
+
 U0 desktop_front(U32 id) {
     Window* w = desktop_window(id);
     if (!w) return;
@@ -188,6 +208,7 @@ Bool desktop_close(U32 id) {
     g.count--;
     if (g.dragging && g.drag_id == id) g.dragging = FALSE;
     I32 ox = w->x, oy = w->y, ow = (I32)w->w, oh = (I32)w->h;
+    if (w->on_close) w->on_close(w);
     Free(w->content.px);
     MemSet(w, 0, sizeof(*w));
     display_begin();
@@ -273,6 +294,19 @@ U0 desktop_pointer(I32 x, I32 y, U32 buttons) {
             g.grab_dx = rx;
             g.grab_dy = ry;
             g.drags++;
+        } else if (rx >= WIN_BORDER && rx < (I32)w->w - WIN_BORDER &&
+                   ry >= WIN_BORDER + WIN_TITLE_H && ry < (I32)w->h - WIN_BORDER) {
+            // In the contents: the program's click; a second press soon
+            // after, close by, in the same window, is a double click.
+            I32 cx = rx - WIN_BORDER, cy = ry - WIN_BORDER - WIN_TITLE_H;
+            U64 now = timer_get_uptime_ms();
+            Bool dbl = s_click_id == w->id && now - s_click_ms <= DOUBLE_CLICK_MS &&
+                       cx - s_click_x <= 4 && s_click_x - cx <= 4 && cy - s_click_y <= 4 && s_click_y - cy <= 4;
+            s_click_id = dbl ? 0xFFFFFFFF : w->id;
+            s_click_x = cx;
+            s_click_y = cy;
+            s_click_ms = now;
+            if (w->on_click) w->on_click(w, cx, cy, dbl);
         }
     } else if (!left) {
         g.dragging = FALSE;

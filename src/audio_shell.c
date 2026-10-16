@@ -28,16 +28,21 @@ static U32 wav_fill(I16* out, U32 max, U0* p) {
     return n;
 }
 
-static U0 audio_play_file(const char* name) {
+const char* audio_play_file(const char* name, U64* frames_played) {
+    if (frames_played) *frames_played = 0;
+    if (!hda_state()->ready) {
+        kprintf("audio: no HD Audio output\n");
+        return "no HD Audio output";
+    }
     if (!redsea_eml_is_mounted()) {
         kprintf("audio: no RedSea volume mounted\n");
-        return;
+        return "no RedSea volume mounted";
     }
     size_t size = 0;
     U8* data = redsea_eml_read_file_path(name, &size);
     if (!data) {
         kprintf("audio: %s: no such file\n", name);
-        return;
+        return "no such file";
     }
     WavCtx c;
     const char* why = wav_parse(data, size, &c.w);
@@ -45,15 +50,18 @@ static U0 audio_play_file(const char* name) {
         kprintf("audio: %s: %s\n", name, why);
     } else if (!hda_set_rate(c.w.rate)) {
         kprintf("audio: %s: %u Hz is not a rate this codec supports\n", name, c.w.rate);
+        why = "a rate this codec does not support";
     } else {
         U32 ms = (U32)((U64)c.w.frames * 1000 / c.w.rate);
         kprintf("[AUDIO] play %s: %u Hz, 16-bit, %s, %u frames (%u.%03u s)\n", name, c.w.rate,
                 c.w.channels == 2 ? "stereo" : "mono", c.w.frames, ms / 1000, ms % 1000);
         c.next = 0;
         U64 frames = hda_play(wav_fill, &c);
+        if (frames_played) *frames_played = frames;
         kprintf("[AUDIO] play done: %u frames, %u underrun(s)\n", (U32)frames, (U32)hda_state()->underruns);
     }
     Free(data);
+    return why;
 }
 
 static U0 audio_status(U0) {
@@ -108,8 +116,7 @@ static Bool audio_run(const char* cmd) {
         const char* p = cmd + 11;
         while (*p == ' ') p++;
         if (!*p) kprintf("usage: audio play <file.wav>\n");
-        else if (!hda_state()->ready) kprintf("audio: no HD Audio output\n");
-        else audio_play_file(p);
+        else audio_play_file(p, NULL);
         return TRUE;
     }
     if (shell_is_prefix("audio", cmd)) {

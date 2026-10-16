@@ -56,6 +56,9 @@ U64       hda_play(HdaFill fill, U0* ctx);
 // percent of full scale. Blocks until it has been played. Returns frames played.
 U32       hda_tone(U32 hz, U32 ms, U32 level_pct);
 
+// Play a WAV file from the RedSea disk at its own rate (blocks until it has
+// been played; reports on the console). NULL if it played, else why not.
+const char* audio_play_file(const char* path, U64* frames_played);
 U0        audio_shell_register(U0);
 
 #endif // HDA_H

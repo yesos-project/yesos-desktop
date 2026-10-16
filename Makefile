@@ -11,7 +11,7 @@
 #                   or sdl): the console is on the screen too, and typed into
 #                   from the window (virtio keyboard and tablet) or this terminal
 #   make test       run tools/test_desktop.py, test_audio.py, test_display.py,
-#                   test_input.py
+#                   test_input.py, test_window.py, test_files.py
 # Exit QEMU: Ctrl-A X
 # =============================================================================
 PRODUCT = desktop
@@ -34,7 +34,7 @@ run-gui: $(ELF) yesos_disk.img
 	qemu-system-riscv64 $(QEMU_CPU) $(QEMU_DISK) $(QEMU_AUDIO) $(QEMU_SCREEN) -kernel $(ELF) \
 		-display $(UI) -serial mon:stdio
 
-TESTS = test_desktop test_audio test_display test_input test_window
+TESTS = test_desktop test_audio test_display test_input test_window test_files
 test: $(ELF)
 	@fail=0; for t in $(TESTS); do echo "== $$t"; python3 tools/$$t.py || fail=1; done; exit $$fail
 
