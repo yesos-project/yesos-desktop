@@ -33,15 +33,15 @@ own tests.
 
 ## At a glance
 
-| | What | Source |
-|---|---|---|
-| 🪟 | **Desktop**: overlapping windows with their own contents off the screen, composed only where something changed; drag, raise, close | `src/desktop.c`, `src/surface.c` |
-| 📁 | **File browser** on the RedSea disk: open, play, view; copy, rename, delete, new folder | `src/files.c` |
-| 📄 | **Text viewer**: UTF-8, tabs, scrolling | `src/files.c` |
-| 🔊 | **HD Audio**: tones, WAV files bit for bit, playback in the background | `src/hda.c`, `src/wav.c`, `src/audio_shell.c` |
-| ⌨️ | **Keyboard and tablet** (virtio): US and Spanish layouts with dead keys, a pointer | `src/input.c` |
-| 🖥️ | **Console on the screen**: in its window or the whole screen, with line editing and history | `src/terminal.c` |
-| 🎨 | **Framebuffer** (bochs-display) and the core's 8x16 font, Latin-1 and € | `src/display.c` |
+| What | Source |
+|---|---|
+| **Desktop**: overlapping windows with their own contents off the screen, composed only where something changed; drag, raise, close | `src/desktop.c`, `src/surface.c` |
+| **File browser** on the RedSea disk: open, play, view; copy, rename, delete, new folder | `src/files.c` |
+| **Text viewer**: UTF-8, tabs, scrolling | `src/files.c` |
+| **HD Audio**: tones, WAV files bit for bit, playback in the background | `src/hda.c`, `src/wav.c`, `src/audio_shell.c` |
+| **Keyboard and tablet** (virtio): US and Spanish layouts with dead keys, a pointer | `src/input.c` |
+| **Console on the screen**: in its window or the whole screen, with line editing and history | `src/terminal.c` |
+| **Framebuffer** (bochs-display) and the core's 8x16 font, Latin-1 and € | `src/display.c` |
 
 ## Quick start
 
