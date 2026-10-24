@@ -14,6 +14,7 @@
 #include "kprintf.h"
 #include "memory.h"
 #include "timer.h"
+#include "yesmath.h"
 
 // Controller registers (HDA spec 3.3)
 #define REG_GCAP      0x00
@@ -371,12 +372,10 @@ U32 hda_write(const I16* stereo, U32 frames) {
     U32 room = HDA_RING_FRAMES - WRITE_GUARD;
     U32 space = queued < room ? room - queued : 0;
     U32 n = frames < space ? frames : space;
-    I16* ring = (I16*)s_ring;
-    for (U32 i = 0; i < n; i++) {
-        U32 at = (U32)((g.frames_written + i) & RING_MASK) * 2;
-        ring[at] = stereo[2 * i];
-        ring[at + 1] = stereo[2 * i + 1];
-    }
+    U32 at = (U32)(g.frames_written & RING_MASK);
+    U32 first = n < HDA_RING_FRAMES - at ? n : HDA_RING_FRAMES - at;   // up to the end of the ring
+    ym_memcpy(s_ring + (U64)at * HDA_FRAME_BYTES, stereo, (U64)first * HDA_FRAME_BYTES);
+    ym_memcpy(s_ring, stereo + 2 * first, (U64)(n - first) * HDA_FRAME_BYTES);   // the rest from its start
     io_fence();
     g.frames_written += n;
     if (n) pisano_step();

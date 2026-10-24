@@ -1,9 +1,11 @@
 // ============================================================================
-// YesOS Desktop - drawing on surfaces (see surface.h). Integer only.
+// YesOS Desktop - drawing on surfaces (see surface.h). Integer only; rows are
+// filled and copied by yesmath (core module "math": RVV when the hart has V).
 // ============================================================================
 
 #include "surface.h"
 #include "font.h"
+#include "yesmath.h"
 
 // Clip (x, y, w, h) to the surface; FALSE if nothing is left.
 static Bool clip(const Surface* s, I32* x, I32* y, I32* w, I32* h) {
@@ -31,8 +33,7 @@ Surface surf_view(const Surface* s, I32 x, I32 y, I32 w, I32 h) {
 U0 surf_fill(Surface* s, I32 x, I32 y, I32 w, I32 h, U32 rgb) {
     if (!clip(s, &x, &y, &w, &h)) return;
     for (I32 r = 0; r < h; r++) {
-        U32* row = s->px + (U64)(y + r) * s->pitch + x;
-        for (I32 c = 0; c < w; c++) row[c] = rgb;
+        ym_fill32(s->px + (U64)(y + r) * s->pitch + x, rgb, (U64)w);
     }
     damaged(s, x, y, w, h);
 }
@@ -65,8 +66,7 @@ U0 surf_scroll(Surface* s, I32 x, I32 y, I32 w, I32 h, I32 dy, U32 bg) {
     if (dy > h) dy = h;
     for (I32 r = 0; r + dy < h; r++) {                    // top to bottom: the source is below
         U32* dst = s->px + (U64)(y + r) * s->pitch + x;
-        const U32* src = dst + (U64)dy * s->pitch;
-        for (I32 c = 0; c < w; c++) dst[c] = src[c];
+        ym_memcpy(dst, dst + (U64)dy * s->pitch, (U64)w * 4);      // different rows: no overlap
     }
     SurfaceDamageFn d = s->damage;                        // one report for the whole move
     s->damage = 0;
@@ -79,9 +79,8 @@ U0 surf_blit(Surface* dst, I32 x, I32 y, const Surface* src) {
     I32 cx = x, cy = y, cw = src->w, ch = src->h;
     if (!src->px || !clip(dst, &cx, &cy, &cw, &ch)) return;
     for (I32 r = 0; r < ch; r++) {
-        U32* d = dst->px + (U64)(cy + r) * dst->pitch + cx;
-        const U32* p = src->px + (U64)(cy - y + r) * src->pitch + (cx - x);
-        for (I32 c = 0; c < cw; c++) d[c] = p[c];
+        ym_memcpy(dst->px + (U64)(cy + r) * dst->pitch + cx,
+                  src->px + (U64)(cy - y + r) * src->pitch + (cx - x), (U64)cw * 4);
     }
     damaged(dst, cx, cy, cw, ch);
 }

@@ -334,6 +334,14 @@ def main():
         compare(vm.screendump(shot), desktop(W, H, 3, 3, COLS, ROWS, s.client(), s.ptr),
                 "after small overlapping moves")
 
+        # desktop bench: 16 compositions and 16 scrolls by 0 lines leave the
+        # screen as it was, plus the lines the command printed
+        m = vm.send("desktop bench", 4)
+        out = vm.since(m)
+        check("desktop bench: compose" in out and "desktop bench: scroll" in out, "desktop bench reports both measures")
+        compare(vm.screendump(shot), desktop(W, H, 3, 3, COLS, ROWS, s.client(), s.ptr),
+                "after desktop bench: the same screen plus its output")
+
         # off: the console takes the whole screen; on: the window again
         m = vm.send("desktop off", 1.5)
         m = vm.send("term", 1)

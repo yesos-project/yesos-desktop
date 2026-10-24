@@ -82,9 +82,22 @@ is measured today: see the
   console.
 - `desktop off` gives the whole screen to the console; `desktop on` puts
   the windows back. A mode change lays everything out again.
+- Pixel rows are filled and copied with **yesmath**, the core's optional
+  `math` module: RVV 1.0 vector code when the hart has V, word-wide scalar
+  code otherwise, the same pixels either way (`math use scalar|vector`
+  switches). `desktop bench` measures it. Retired instructions per pixel
+  under QEMU `-icount -smp 1` (with several harts QEMU's counter adds them
+  all; instructions, not cycles: a real chip is limited by memory):
+
+  | | Before (C loops) | yesmath scalar | yesmath RVV |
+  |---|---:|---:|---:|
+  | Compose the whole screen, 1024x768 | 6.39 | 4.13 | 0.43 |
+  | Scroll the console's contents, 800x640 | 5.01 | 3.03 | 0.24 |
+
+  The audio ring is filled the same way (`ym_memcpy`).
 
 ```text
-Desktop     desktop [status]   desktop on   desktop off   desktop move <x> <y>
+Desktop     desktop [status]   desktop on   desktop off   desktop move <x> <y>   desktop bench
             window [list]   window new <cols> <rows> <title>   window text <id> <col> <row> <rrggbb> <text>
             window front <id>   window move <id> <x> <y>   window close <id>
 ```
@@ -221,11 +234,11 @@ the newer suites, faults were put in on purpose to see them caught (below).
 
 | Suite | Checks | What it covers |
 |---|---:|---|
-| `test_desktop.py` | 17 | boot with the PMP proven, the console, nothing on the network, a file across a reboot, UTF-8 input, fsck |
+| `test_desktop.py` | 18 | boot with the PMP proven, the console, nothing on the network, a file across a reboot, UTF-8 input, fsck, yesmath's self-check |
 | `test_audio.py` | 38 | tones (duration, frequency, level, SINAD), WAV files bit for bit, bad files refused |
 | `test_display.py` | 23 | modes, test pattern, text in four colours, clipping, no display |
 | `test_input.py` | 35 | both layouts exactly, editing keys, the layout across a reboot, pointer, clicks, wheel, the console on the screen |
-| `test_window.py` | 35 | one and several windows: drags, raise, focus, close, a covered console, at most 8 |
+| `test_window.py` | 37 | one and several windows: drags, raise, focus, close, a covered console, at most 8; the screen after `desktop bench` |
 | `test_files.py` | 30 | browser and viewer, keys to the focused window, WAV files in the background |
 | `test_fileops.py` | 24 | copy, rename, delete, new folder, every refusal, fsck, the disk after a reboot |
 

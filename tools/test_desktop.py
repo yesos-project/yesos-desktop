@@ -91,6 +91,8 @@ def main():
             check("¿Qué tal?" in console(vm, "disk cat notas.txtñ\x7f", 2),
                   "backspace removes a whole UTF-8 character (ñ is two bytes)")
             check("CLEAN" in console(vm, "fsck", 6), "fsck clean")
+            check("[RESULT] yesmath self-check OK: 10 vector results identical" in console(vm, "math test", 4),
+                  "math test: yesmath's vector results equal the scalar ones")
             check("FATAL" not in vm.output() and "EXCEPTION" not in vm.output(), "no kernel faults")
         finally:
             vm.stop()

@@ -11,6 +11,7 @@
 #include "memory.h"
 #include "shell.h"
 #include "font.h"
+#include "yesmath.h"
 
 #define BOCHS_VENDOR        0x1234
 #define BOCHS_DEVICE        0x1111
@@ -166,10 +167,7 @@ U0 display_fill(U32 x, U32 y, U32 w, U32 h, U32 rgb) {
     if (w > g.width - x) w = g.width - x;
     if (h > g.height - y) h = g.height - y;
     draw_begin();
-    for (U32 r = 0; r < h; r++) {
-        U32* row = g.fb + (U64)(y + r) * g.pitch + x;
-        for (U32 c = 0; c < w; c++) row[c] = rgb;
-    }
+    for (U32 r = 0; r < h; r++) ym_fill32(g.fb + (U64)(y + r) * g.pitch + x, rgb, w);
     draw_end();
 }
 

@@ -407,6 +407,34 @@ static Bool window_run(const char* cmd) {
     return TRUE;
 }
 
+static inline U64 instret(U0) { U64 v; __asm__ __volatile__("csrr %0, minstret" : "=r"(v)); return v; }
+
+// Retired instructions of 16 compositions of the whole screen and of 16
+// scrolls of the console window's contents by 0 lines (every row copied onto
+// itself, the contents unchanged). Only meaningful under QEMU -icount with one
+// hart (-smp 1), or on a board: without -icount QEMU's minstret follows the
+// clock, and with several harts it counts the instructions of all of them.
+static U0 desktop_bench(U0) {
+    DisplayState* d = display_state();
+    Window* con = desktop_window(0);
+    if (!g.on || !d->ready || !con) { kprintf("desktop bench: the desktop is off\n"); return; }
+    U64 t0 = instret();
+    for (U32 i = 0; i < 16; i++) compose(0, 0, (I32)d->width, (I32)d->height);
+    U64 tc = (instret() - t0) / 16;
+    SurfaceDamageFn dmg = con->content.damage;
+    con->content.damage = 0;                        // the copies only, no composing
+    t0 = instret();
+    for (U32 i = 0; i < 16; i++) surf_scroll(&con->content, 0, 0, con->content.w, con->content.h, 0, 0);
+    U64 ts = (instret() - t0) / 16;
+    con->content.damage = dmg;
+    U64 px = (U64)d->width * d->height, cpx = (U64)con->content.w * con->content.h;
+    kprintf("desktop bench: compose %ux%u: %u instructions (%u.%02u per pixel)\n", (U64)d->width, (U64)d->height,
+            tc, tc / px, tc * 100 / px % 100);
+    kprintf("desktop bench: scroll the console contents %ux%u: %u instructions (%u.%02u per pixel)\n",
+            (U64)con->content.w, (U64)con->content.h, ts, ts / cpx, ts * 100 / cpx % 100);
+    kprintf("desktop bench: retired instructions (minstret): meaningful only under QEMU -icount -smp 1, or on a board\n");
+}
+
 static Bool desktop_run(const char* cmd) {
     if (shell_is_prefix("window", cmd) && (cmd[6] == ' ' || cmd[6] == '\0')) return window_run(cmd);
     if (StrCmp(cmd, "desktop") == 0 || StrCmp(cmd, "desktop status") == 0) {
@@ -430,8 +458,10 @@ static Bool desktop_run(const char* cmd) {
             desktop_move(0, x, y);
             kprintf("[DESKTOP] window at %d,%d\n", (I64)desktop_window(0)->x, (I64)desktop_window(0)->y);
         }
+    } else if (StrCmp(cmd, "desktop bench") == 0) {
+        desktop_bench();
     } else if (shell_is_prefix("desktop", cmd) && (cmd[7] == ' ' || cmd[7] == '\0')) {
-        kprintf("usage: desktop [status] | desktop on | desktop off | desktop move <x> <y>\n");
+        kprintf("usage: desktop [status] | desktop on | desktop off | desktop move <x> <y> | desktop bench\n");
     } else {
         return FALSE;
     }
