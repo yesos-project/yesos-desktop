@@ -70,8 +70,17 @@ def desktop(w, h, wx, wy, cols, rows, client, ptr):
                     img[wy + B + 2 + r, x + c] = ti.rgb(TITLE_FG)
         x += 8
     img[wy + B + T:wy + B + T + rows * 16, wx + B:wx + B + cols * 8] = client
+    grip(img, wx, wy, ww, wh)
     ti.draw_arrow(img, *ptr)
     return img
+
+
+def grip(img, X, Y, W_, H_):
+    """The resize grip of a resizable window: three diagonals in the contents' bottom-right corner."""
+    gx, gy = X + W_ - B - 1, Y + H_ - B - 1
+    for d in (3, 7, 11):
+        for i in range(d + 1):
+            img[gy - (d - i), gx - i] = ti.rgb(BORDER)
 
 
 class Session:
@@ -115,9 +124,9 @@ def status(vm):
 
 
 class Win:
-    def __init__(self, wid, x, y, cols, rows, title, closable=True):
+    def __init__(self, wid, x, y, cols, rows, title, closable=True, resizable=True):
         self.id, self.x, self.y, self.cols, self.rows, self.title = wid, x, y, cols, rows, title
-        self.closable = closable
+        self.closable, self.resizable = closable, resizable
         self.w, self.h = 2 * B + cols * 8, 2 * B + T + rows * 16
         self.content = np.zeros((rows * 16, cols * 8, 3), np.uint8)
         self.content[:] = ti.rgb(PAPER)
@@ -161,6 +170,8 @@ def compose(w, h, wins, focus, ptr):
                 img[by + i, bx + i:bx + i + 2] = 255
                 img[by + i, bx + 12 - i:bx + 14 - i] = 255
         img[Y + B + T:Y + B + T + win.rows * 16, X + B:X + B + win.cols * 8] = win.content
+        if win.resizable:
+            grip(img, X, Y, W_, H_)
     ti.draw_arrow(img, *ptr)
     return img
 

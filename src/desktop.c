@@ -10,6 +10,7 @@
 #include "memory.h"
 #include "shell.h"
 #include "timer.h"
+#include "yesmath.h"
 
 static DesktopState g;
 static Window s_win[WIN_MAX];
@@ -89,6 +90,11 @@ static U0 draw_window(Surface* v, const Window* w, I32 rx, I32 ry) {
         }
     }
     surf_blit(v, X + WIN_BORDER, Y + WIN_BORDER + WIN_TITLE_H, &w->content);
+    if (w->resizable) {                             // the grip: three diagonals in the contents' corner
+        I32 gx = X + W - WIN_BORDER - 1, gy = Y + H - WIN_BORDER - 1;
+        for (I32 d = 3; d < WIN_GRIP; d += 4)
+            for (I32 i = 0; i <= d; i++) surf_fill(v, gx - i, gy - (d - i), 1, 1, WIN_BORDER_RGB);
+    }
 }
 
 // Put the screen rectangle (x, y, w, h) together again from the windows.
@@ -125,6 +131,53 @@ static Bool alloc_content(Window* w) {
 }
 
 // ---- windows ---------------------------------------------------------------------
+
+Bool desktop_resize(U32 id, U32 cols, U32 rows) {
+    Window* w = desktop_window(id);
+    if (!w || !w->resizable || !g.on) return FALSE;
+    if (cols < WIN_MIN_COLS) cols = WIN_MIN_COLS;
+    if (rows < WIN_MIN_ROWS) rows = WIN_MIN_ROWS;
+    fit(&cols, &rows);
+    if (cols == w->cols && rows == w->rows) return TRUE;
+    U32 nw = cols * FONT_WIDTH, nh = rows * FONT_HEIGHT;
+    U32* px = (U32*)Malloc((size_t)nw * nh * 4);
+    if (!px) return FALSE;
+    ym_fill32(px, w->paper, (U64)nw * nh);
+    Surface old = w->content;
+    I32 ox = w->x, oy = w->y, ow = (I32)w->w, oh = (I32)w->h;
+    w->content.px = px;
+    w->content.w = (I32)nw;
+    w->content.h = (I32)nh;
+    w->content.pitch = nw;
+    set_size(w, cols, rows);
+    clamp(w, &w->x, &w->y);
+    SurfaceDamageFn dmg = w->content.damage;        // the program redraws; composed once below
+    w->content.damage = NULL;
+    if (w->on_resize) {
+        w->on_resize(w, &old);
+    } else {                                        // keep the old pixels, top-left
+        U32 kw = (U32)old.w < nw ? (U32)old.w : nw, kh = (U32)old.h < nh ? (U32)old.h : nh;
+        for (U32 y = 0; y < kh; y++) ym_memcpy(px + (U64)y * nw, old.px + (U64)y * old.pitch, (U64)kw * 4);
+    }
+    w->content.damage = dmg;
+    Free(old.px);
+    if (w->id == 0) {
+        g.con_cols = cols;
+        g.con_rows = rows;
+    }
+    g.resizes++;
+    display_begin();
+    I32 x0 = ox < w->x ? ox : w->x, y0 = oy < w->y ? oy : w->y;
+    I32 x1 = ox + ow > w->x + (I32)w->w ? ox + ow : w->x + (I32)w->w;
+    I32 y1 = oy + oh > w->y + (I32)w->h ? oy + oh : w->y + (I32)w->h;
+    compose(x0, y0, x1 - x0, y1 - y0);
+    display_end();
+    return TRUE;
+}
+
+static U0 console_resize(Window* w, const Surface* old) {
+    terminal_resize(old, &w->content, w->cols, w->rows);   // keeps the text that fits, the cursor's row last
+}
 
 U0 desktop_show(Window* w) {
     if (w && w->used) compose(w->x + WIN_BORDER, w->y + WIN_BORDER + WIN_TITLE_H, w->content.w, w->content.h);
@@ -182,6 +235,8 @@ Window* desktop_new_window(U32 cols, U32 rows, const char* title) {
     w->used = TRUE;
     w->id = g.next_id++;
     w->closable = TRUE;
+    w->resizable = TRUE;
+    w->paper = WIN_PAPER;
     StrNCpy(w->title, title, WIN_TITLE_MAX);
     w->title[WIN_TITLE_MAX - 1] = '\0';
     U32 k = g.created++ % 8;                        // cascade
@@ -206,7 +261,7 @@ Bool desktop_close(U32 id) {
     for (; at + 1 < s_nz; at++) s_z[at] = s_z[at + 1];
     s_nz--;
     g.count--;
-    if (g.dragging && g.drag_id == id) g.dragging = FALSE;
+    if ((g.dragging || g.resizing) && g.drag_id == id) g.dragging = g.resizing = FALSE;
     I32 ox = w->x, oy = w->y, ow = (I32)w->w, oh = (I32)w->h;
     if (w->on_close) w->on_close(w);
     Free(w->content.px);
@@ -227,14 +282,14 @@ static U0 layout(U0) {
     DisplayState* d = display_state();
     Window* con = desktop_window(0);
     if (!d->ready || !con) return;
-    U32 cols = WIN_COLS, rows = WIN_ROWS;
+    U32 cols = g.con_cols, rows = g.con_rows;
     fit(&cols, &rows);
     if (cols != con->cols || rows != con->rows || !con->content.px) {
         set_size(con, cols, rows);
         alloc_content(con);
     }
     for (U32 i = 0; i < WIN_MAX; i++) if (s_win[i].used) clamp(&s_win[i], &s_win[i].x, &s_win[i].y);
-    g.dragging = FALSE;
+    g.dragging = g.resizing = FALSE;
     display_begin();
     terminal_set_area(&con->content, 0, 0, con->cols, con->rows, TRUE);
     compose(0, 0, (I32)d->width, (I32)d->height);
@@ -244,7 +299,7 @@ static U0 layout(U0) {
 U0 desktop_enable(Bool on) {
     if (on && !display_state()->ready) return;
     g.on = on;
-    g.dragging = FALSE;
+    g.dragging = g.resizing = FALSE;
     terminal_set_layout(on ? layout : NULL);
 }
 
@@ -257,11 +312,16 @@ U0 desktop_init(U0) {
     con->x = WIN_X0;
     con->y = WIN_Y0;
     StrNCpy(con->title, WIN_TITLE, WIN_TITLE_MAX);
+    con->resizable = TRUE;
+    con->paper = TERMINAL_BG;
+    con->on_resize = console_resize;
     s_z[0] = 0;
     s_nz = 1;
     g.count = 1;
     g.next_id = 1;
     g.focus = 0;
+    g.con_cols = WIN_COLS;
+    g.con_rows = WIN_ROWS;
     desktop_enable(TRUE);
 }
 
@@ -287,6 +347,13 @@ U0 desktop_pointer(I32 x, I32 y, U32 buttons) {
         if (w->closable && rx >= (I32)close_x(w) && rx < (I32)close_x(w) + WIN_CLOSE_SIZE &&
             ry >= (I32)close_y() && ry < (I32)close_y() + WIN_CLOSE_SIZE) {
             desktop_close(w->id);
+        } else if (w->resizable && rx >= (I32)w->w - WIN_BORDER - WIN_GRIP && rx < (I32)w->w - WIN_BORDER &&
+                   ry >= (I32)w->h - WIN_BORDER - WIN_GRIP && ry < (I32)w->h - WIN_BORDER) {
+            // The grip: the pointer's offset from the bottom-right corner is kept.
+            g.resizing = TRUE;
+            g.drag_id = w->id;
+            g.grab_dx = (I32)w->w - rx;
+            g.grab_dy = (I32)w->h - ry;
         } else if (rx >= WIN_BORDER && rx < (I32)w->w - WIN_BORDER &&
                    ry >= WIN_BORDER && ry < WIN_BORDER + WIN_TITLE_H) {
             g.dragging = TRUE;
@@ -309,7 +376,15 @@ U0 desktop_pointer(I32 x, I32 y, U32 buttons) {
             if (w->on_click) w->on_click(w, cx, cy, dbl);
         }
     } else if (!left) {
-        g.dragging = FALSE;
+        g.dragging = g.resizing = FALSE;
+    } else if (g.resizing) {
+        Window* w = desktop_window(g.drag_id);
+        if (w) {
+            I32 ow = x + g.grab_dx - w->x, oh = y + g.grab_dy - w->y;   // outer size wanted
+            I32 c = (ow - 2 * WIN_BORDER + FONT_WIDTH / 2) / FONT_WIDTH;
+            I32 r = (oh - 2 * WIN_BORDER - WIN_TITLE_H + FONT_HEIGHT / 2) / FONT_HEIGHT;
+            desktop_resize(w->id, c > 0 ? (U32)c : 1, r > 0 ? (U32)r : 1);
+        }
     } else if (g.dragging) {
         desktop_move(g.drag_id, x - g.grab_dx, y - g.grab_dy);
     }
@@ -395,6 +470,15 @@ static Bool window_run(const char* cmd) {
         I32 y = (I32)shell_parse_uint(next_word(p));
         desktop_move(w->id, x, y);
         kprintf("[WINDOW] %u at %d,%d\n", (U64)w->id, (I64)w->x, (I64)w->y);
+    } else if (shell_is_prefix("window size ", cmd)) {
+        const char* p = cmd + 12;
+        Window* w = window_arg(p);
+        if (!w) return TRUE;
+        p = next_word(p);
+        U32 cols = (U32)shell_parse_uint(p);
+        U32 rows = (U32)shell_parse_uint(next_word(p));
+        if (!desktop_resize(w->id, cols, rows)) kprintf("window: window %u cannot be resized\n", (U64)w->id);
+        else kprintf("[WINDOW] %u is %ux%u characters\n", (U64)w->id, (U64)w->cols, (U64)w->rows);
     } else if (shell_is_prefix("window close ", cmd)) {
         U32 id = (U32)shell_parse_uint(cmd + 13);
         if (id == 0) kprintf("window: the console's window cannot be closed (desktop off hides the desktop)\n");
@@ -402,7 +486,7 @@ static Bool window_run(const char* cmd) {
         else kprintf("[WINDOW] %u closed\n", (U64)id);
     } else {
         kprintf("usage: window [list] | window new <cols> <rows> <title> | window text <id> <col> <row> <rrggbb> <text>\n"
-                "       window front <id> | window move <id> <x> <y> | window close <id>\n");
+                "       window front <id> | window move <id> <x> <y> | window size <id> <cols> <rows> | window close <id>\n");
     }
     return TRUE;
 }
@@ -472,7 +556,7 @@ static U0 desktop_help(U0) {
     kprintf("  Desktop (windows: drag by the title bar, close with the box, a press brings to the front)\n");
     kprintf("    desktop [status]   desktop on   desktop off   desktop move <x> <y>\n");
     kprintf("    window [list]   window new <cols> <rows> <title>   window text <id> <col> <row> <rrggbb> <text>\n");
-    kprintf("    window front <id>   window move <id> <x> <y>   window close <id>\n");
+    kprintf("    window front <id>   window move <id> <x> <y>   window size <id> <cols> <rows>   window close <id>\n");
 }
 
 static const ShellExtension s_desktop_shell = { desktop_run, desktop_help, NULL, NULL };

@@ -12,7 +12,7 @@
 #                   from the window (virtio keyboard and tablet) or this terminal
 #   make test       run tools/test_desktop.py, test_audio.py, test_display.py,
 #                   test_input.py, test_window.py, test_files.py, test_fileops.py,
-#                   test_apps.py
+#                   test_apps.py, test_resize.py
 # Exit QEMU: Ctrl-A X
 # =============================================================================
 PRODUCT = desktop
@@ -35,7 +35,7 @@ run-gui: $(ELF) yesos_disk.img
 	qemu-system-riscv64 $(QEMU_CPU) $(QEMU_DISK) $(QEMU_AUDIO) $(QEMU_SCREEN) -kernel $(ELF) \
 		-display $(UI) -serial mon:stdio
 
-TESTS = test_desktop test_audio test_display test_input test_window test_files test_fileops test_apps
+TESTS = test_desktop test_audio test_display test_input test_window test_files test_fileops test_apps test_resize
 test: $(ELF)
 	@fail=0; for t in $(TESTS); do echo "== $$t"; python3 tools/$$t.py || fail=1; done; exit $$fail
 

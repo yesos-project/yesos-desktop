@@ -13,7 +13,10 @@
 // title bar drags it; the box at the right of the title bar closes it.
 // Windows always stay whole on the screen. Keys go to the focused window
 // if it has a program that takes them (the file browser), else to the
-// console.
+// console. A resizable window has a grip in the bottom-right corner of its
+// contents: dragging it (or `window size`) changes its size in whole
+// characters; the pixels that still fit are kept and its program re-lays
+// itself out (on_resize).
 
 #define DESKTOP_BG          0x1F3B57
 #define WIN_BORDER          2
@@ -33,6 +36,9 @@
 #define WIN_ROWS            40
 #define WIN_X0              40              // the console's first position
 #define WIN_Y0              40
+#define WIN_GRIP            12              // the resize grip: the contents' last 12 x 12 pixels
+#define WIN_MIN_COLS        16
+#define WIN_MIN_ROWS        3
 
 // Keys for window programs: Unicode code points, or these.
 #define WKEY_ENTER      0x110001
@@ -61,12 +67,17 @@ struct Window {
     U32     w, h;                           // outer size: 2*border + text, + title bar
     U32     cols, rows;                     // text area in characters
     Bool    closable;
+    Bool    resizable;
+    U32     paper;                          // colour of contents newly exposed by a resize
     char    title[WIN_TITLE_MAX];
     Surface content;                        // cols*8 x rows*16 pixels, off the screen
     // The window's program (all optional):
     Bool  (*on_key)(Window* w, U32 key);    // TRUE: taken
     U0    (*on_click)(Window* w, I32 x, I32 y, Bool double_click);   // in the contents
     U0    (*on_close)(Window* w);           // free what `data` holds
+    // cols/rows/content changed (content filled with `paper`): redraw, taking
+    // what it wants from `old`. Without it the old pixels are kept top-left.
+    U0    (*on_resize)(Window* w, const Surface* old);
     U0*     data;
 };
 
@@ -74,10 +85,11 @@ typedef struct {
     Bool on;
     U32  count;                             // windows open
     U32  focus;                             // id of the focused window
-    Bool dragging;
+    Bool dragging, resizing;
     U32  drag_id;
     I32  grab_dx, grab_dy;                  // pointer - corner when the drag started
-    U64  moves, drags, composed_px;         // composed_px: pixels composed onto the screen
+    U64  moves, drags, resizes, composed_px;   // composed_px: pixels composed onto the screen
+    U32  con_cols, con_rows;                // the console's size, as last chosen
     U32  next_id, created;
 } DesktopState;
 
@@ -89,6 +101,7 @@ Window*       desktop_new_window(U32 cols, U32 rows, const char* title);
 Bool          desktop_close(U32 id);        // FALSE for the console or an unknown id
 U0            desktop_front(U32 id);        // to the top, focused
 U0            desktop_move(U32 id, I32 x, I32 y);   // clamped so it stays on the screen
+Bool          desktop_resize(U32 id, U32 cols, U32 rows);   // FALSE if not resizable; sizes clamped
 U0            desktop_pointer(I32 x, I32 y, U32 buttons);   // from the input driver
 Bool          desktop_key(U32 key);         // TRUE if the focused window's program took it
 U0            desktop_show(Window* w);      // its contents were redrawn: compose them

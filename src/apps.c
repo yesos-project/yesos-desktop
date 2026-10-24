@@ -129,6 +129,7 @@ Window* apps_run(const char* path, char* why, U32 why_max) {
     }
     a->cell = (U32)cell;
     a->running = TRUE;
+    w->resizable = FALSE;                       // the canvas is fixed: 320 x 240
     ym_fill32(w->content.px, 0x000000, (U64)CELL_CANVAS_W * CELL_CANVAS_H);
     w->data = a;
     w->on_key = app_key;

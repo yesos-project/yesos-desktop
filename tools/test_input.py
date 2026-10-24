@@ -182,6 +182,19 @@ class Terminal:
             for c in range(8):
                 self.img[y0 + r, x0 + c] = rgb(self.fg if g[r] & (0x80 >> c) else self.BG)
 
+    def resize(self, cols, rows):
+        """terminal_resize() in src/terminal.c: the text rows that end with the
+        cursor's are kept, cut at the new width; the cursor stays in range."""
+        up = self.row - rows + 1 if self.row >= rows else 0
+        img = np.zeros((rows * 16, cols * 8, 3), np.uint8)
+        img[:] = rgb(self.BG)
+        old = self.img[up * 16:up * 16 + rows * 16, :cols * 8]
+        img[:old.shape[0], :old.shape[1]] = old
+        self.img, self.cols, self.rows = img, cols, rows
+        self.row -= up
+        if self.col >= cols:
+            self.col, self.wrap = cols - 1, False
+
     def newline(self):
         self.col, self.wrap = 0, False
         if self.row + 1 < self.rows:

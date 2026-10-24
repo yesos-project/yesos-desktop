@@ -202,6 +202,17 @@ static U0 browser_open(Window* w) {
     }
 }
 
+// A new size: as many entries as now fit, the selection still in view.
+static U0 browser_resized(Window* w, const Surface* old) {
+    (U0)old;
+    Browser* b = (Browser*)w->data;
+    U32 total = shown(b), list_rows = w->rows - 1;
+    if (b->sel >= b->top + list_rows) b->top = b->sel - list_rows + 1;
+    if (b->top + list_rows > total) b->top = total > list_rows ? total - list_rows : 0;
+    if (b->top > b->sel) b->top = b->sel;
+    browser_draw(w);
+}
+
 static U0 browser_select(Window* w, U32 i) {
     Browser* b = (Browser*)w->data;
     U32 total = shown(b), list_rows = w->rows - 1;
@@ -418,6 +429,7 @@ Window* files_open(const char* path) {
     w->on_key = browser_key;
     w->on_click = browser_click;
     w->on_close = free_data;
+    w->on_resize = browser_resized;
     char canon[VFS_MAX_PATH];
     if (!vfs_resolve_path(path, canon, sizeof(canon))) StrNCpy(canon, "/", sizeof(canon));
     browser_load(w, canon);
@@ -460,6 +472,14 @@ static U0 viewer_draw(Window* w) {
     ksnprintf(st, sizeof(st), "%s  lines %u-%u of %u", v->name, (U64)(v->top + 1), (U64)last, (U64)v->lines);
     status_line(w, st);
     finish(w, saved);
+}
+
+static U0 viewer_resized(Window* w, const Surface* old) {
+    (U0)old;
+    Viewer* v = (Viewer*)w->data;
+    U32 rows = w->rows - 1, max_top = v->lines > rows ? v->lines - rows : 0;
+    if (v->top > max_top) v->top = max_top;
+    viewer_draw(w);
 }
 
 static Bool viewer_key(Window* w, U32 key) {
@@ -547,6 +567,7 @@ static Window* viewer_open(const char* path, const char* name, char* why, U32 wh
     for (U32 i = 0; i + 1 < v->size; i++) if (data[i] == '\n') line[k++] = i + 1;
     w->data = v;
     w->on_key = viewer_key;
+    w->on_resize = viewer_resized;
     w->on_close = viewer_close;
     viewer_draw(w);
     return w;

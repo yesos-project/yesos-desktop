@@ -3,6 +3,7 @@
 // ============================================================================
 
 #include "terminal.h"
+#include "yesmath.h"
 #include "display.h"
 #include "surface.h"
 #include "font.h"
@@ -46,13 +47,40 @@ U0 terminal_set_area(Surface* s, U32 x, U32 y, U32 cols, U32 rows, Bool clear_it
     s_surf = s;
     g.x = x;
     g.y = y;
-    if (clear_it || other || cols != g.cols || rows != g.rows) {
+    if (clear_it || other) {
         g.cols = cols ? cols : 1;
         g.rows = rows ? rows : 1;
         display_begin();
         clear();
         cursor(TRUE);
         display_end();
+    } else if (cols != g.cols || rows != g.rows) {
+        g.cols = cols ? cols : 1;
+        g.rows = rows ? rows : 1;
+        if (g.row >= g.rows) g.row = g.rows - 1;
+        if (g.col >= g.cols) { g.col = g.cols - 1; s_wrap_pending = FALSE; }
+    }
+}
+
+U0 terminal_resize(const Surface* old, Surface* s, U32 cols, U32 rows) {
+    if (s != s_surf || !old->px) {
+        terminal_set_area(s, 0, 0, cols, rows, TRUE);
+        return;
+    }
+    cols = cols ? cols : 1;
+    rows = rows ? rows : 1;
+    // The text rows to keep end with the cursor's: `up` rows scroll away.
+    U32 up = g.row >= rows ? g.row - rows + 1 : 0;
+    U32 kw = (U32)old->w < cols * FONT_WIDTH ? (U32)old->w : cols * FONT_WIDTH;
+    for (U32 y = 0; y < rows * FONT_HEIGHT && (up * FONT_HEIGHT + y) < (U32)old->h; y++)
+        ym_memcpy(s->px + (U64)y * s->pitch, old->px + (U64)(up * FONT_HEIGHT + y) * old->pitch, (U64)kw * 4);
+    g.x = g.y = 0;
+    g.cols = cols;
+    g.rows = rows;
+    g.row -= up;
+    if (g.col >= cols) { g.col = cols - 1; s_wrap_pending = FALSE; }
+    if (up || kw < (U32)old->w) {                  // the old cursor may have been cut or moved: redraw it
+        cursor(TRUE);
     }
 }
 

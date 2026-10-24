@@ -26,9 +26,12 @@ TerminalState* terminal_state(U0);
 U0             terminal_enable(Bool on);
 // Where the text goes: pixel (x, y) of surface s (the screen, or the
 // contents of the desktop's console window), cols x rows characters. With
-// clear_it, another surface or a new size the area is cleared; otherwise
-// the text already there is kept.
+// clear_it or another surface the area is cleared; a new size on the same
+// surface keeps the text (scrolled up if the cursor's row is gone).
 U0             terminal_set_area(Surface* s, U32 x, U32 y, U32 cols, U32 rows, Bool clear_it);
+// The console's window was resized: s (same Surface, new pixels) gets the
+// text of `old` that fits, the cursor's row last, and the terminal its new size.
+U0             terminal_resize(const Surface* old, Surface* s, U32 cols, U32 rows);
 // The function that places the terminal after a mode change or `term on`
 // (the desktop's window); NULL: the whole screen.
 typedef U0 (*TerminalLayoutFn)(U0);
