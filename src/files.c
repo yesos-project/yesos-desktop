@@ -3,6 +3,7 @@
 // ============================================================================
 
 #include "files.h"
+#include "apps.h"
 #include "desktop.h"
 #include "surface.h"
 #include "hda.h"
@@ -149,7 +150,7 @@ static Bool ends_with(const char* s, const char* suffix) {     // ASCII, any cas
 
 static Window* viewer_open(const char* path, const char* name, char* why, U32 why_max);
 static Bool browser_key(Window* w, U32 key);
-static U8* read_listed(const char* path, size_t* size);
+U8* files_read(const char* path, size_t* size);
 static U0 browser_select(Window* w, U32 i);
 
 // A sound started from a browser has ended: say so in that browser, if it
@@ -185,6 +186,12 @@ static U0 browser_open(Window* w) {
         const char* why = audio_start_file(p, browser_audio_done, (U0*)(uintptr_t)w->id);
         if (why) ksnprintf(b->msg, sizeof(b->msg), "%s: %s", e->name, why);
         else ksnprintf(b->msg, sizeof(b->msg), "Playing %s", e->name);
+        browser_draw(w);
+    } else if (ends_with(e->name, ".hq")) {
+        // A HolyQ program: run as an app in an isolated cell, in its own window.
+        char why[96];
+        if (!apps_run(p, why, sizeof(why))) ksnprintf(b->msg, sizeof(b->msg), "%s: %s", e->name, why);
+        else ksnprintf(b->msg, sizeof(b->msg), "Running %s in a cell", e->name);
         browser_draw(w);
     } else {
         char why[64];
@@ -285,7 +292,7 @@ static U0 do_ask(Window* w) {
         ksnprintf(b->msg, sizeof(b->msg), "Folders cannot be %s yet", ask == ASK_COPY ? "copied" : "renamed");
     } else if (ask == ASK_COPY) {
         size_t size = 0;
-        U8* data = read_listed(src, &size);
+        U8* data = files_read(src, &size);
         Bool ok = data && vfs_write_file(dst, data, size);
         if (data) Free(data);
         ksnprintf(b->msg, sizeof(b->msg), ok ? "%s copied to %s" : "%s could not be copied to %s", b->subject, b->input);
@@ -487,7 +494,7 @@ static U0 viewer_close(Window* w) {
 // A file as the browser lists it: on the RedSea disk, or in the RAM file
 // system the VFS shows in the same tree (vfs_read_file_exact looks only on
 // the disk and in /ram, and is left so for the NAS's network callers).
-static U8* read_listed(const char* path, size_t* size) {
+U8* files_read(const char* path, size_t* size) {
     U8* data = vfs_read_file_exact(path, size);
     const char* clean = path;
     while (*clean == '/') clean++;
@@ -503,7 +510,7 @@ static U8* read_listed(const char* path, size_t* size) {
 
 static Window* viewer_open(const char* path, const char* name, char* why, U32 why_max) {
     size_t size = 0;
-    U8* data = read_listed(path, &size);
+    U8* data = files_read(path, &size);
     if (!data) { ksnprintf(why, why_max, "cannot be read"); return NULL; }
     if (size > FILES_VIEW_MAX) {
         ksnprintf(why, why_max, "too large to view (%u bytes)", (U64)size);

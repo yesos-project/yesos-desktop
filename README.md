@@ -38,6 +38,7 @@ own tests.
 | **Desktop**: overlapping windows with their own contents off the screen, composed only where something changed; drag, raise, close | `src/desktop.c`, `src/surface.c` |
 | **File browser** on the RedSea disk: open, play, view; copy, rename, delete, new folder | `src/files.c` |
 | **Text viewer**: UTF-8, tabs, scrolling | `src/files.c` |
+| **Apps in windows**: HolyQ programs run in an isolated PMP cell, each in its own window, with keys and pointer through `input()` | `src/apps.c` |
 | **HD Audio**: tones, WAV files bit for bit, other rates resampled to the codec's, playback in the background | `src/hda.c`, `src/wav.c`, `src/audio_shell.c` |
 | **Keyboard and tablet** (virtio): US and Spanish layouts with dead keys, a pointer | `src/input.c` |
 | **Console on the screen**: in its window or the whole screen, with line editing and history | `src/terminal.c` |
@@ -130,6 +131,34 @@ Desktop     desktop [status]   desktop on   desktop off   desktop move <x> <y>  
 ```text
 Files       files [path]   files list
             in the browser: F5 copy  F2 rename  Delete delete  F7 new folder  Esc cancel
+```
+
+## Apps in windows
+
+A HolyQ program from the disk runs in a **PMP cell**: a hart whose locked
+memory protection lets it see only its own code, data and a private
+320x240 canvas, never the kernel, the screen or other windows (the core's
+`kernel/cell.c`; its code is checked by the instruction verifier first).
+`app run <file.HQ>`, or Enter on a `.HQ` file in the browser, starts it in a
+window of its own, 40 x 15 characters, the size of the canvas.
+
+- The app draws with `gfx_clear`, `gfx_rect`, `gfx_plot`, `gfx_text` and
+  shows a frame with `gfx_present()`: the core hands the canvas to the
+  desktop, which copies it into the window (`ym_memcpy`).
+- Keys typed in the focused app window and presses in its contents are
+  queued (16) for the app, which reads them with `input()`: a character
+  (Enter 10, Backspace 8, Esc 27), an arrow (0x110001 up, 0x110002 down,
+  0x110003 left, 0x110004 right), or 0x80000000 | x << 16 | y for a press at
+  canvas pixel (x, y); 0 when there is none.
+- `SleepMS` in an app does not hold the desktop: hart 0 keeps running and
+  completes the sleep later.
+- Closing the window stops the app. An app that ends on its own, faults
+  (e.g. reading kernel memory: the PMP stops it) or hits the 10-minute
+  watchdog keeps its window and last frame; the title says `(finished)`,
+  `(fault)` or `(watchdog)`.
+
+```text
+Apps        app [list]   app run <file.HQ>
 ```
 
 ## Keyboard and pointer
@@ -249,6 +278,7 @@ the newer suites, faults were put in on purpose to see them caught (below).
 | `test_window.py` | 37 | one and several windows: drags, raise, focus, close, a covered console, at most 8; the screen after `desktop bench` |
 | `test_files.py` | 30 | browser and viewer, keys to the focused window, WAV files in the background |
 | `test_fileops.py` | 24 | copy, rename, delete, new folder, every refusal, fsck, the disk after a reboot |
+| `test_apps.py` | 16 | apps in cells: input events exactly, the window pixel for pixel, the console free while an app sleeps, close stops it, the PMP stops a hostile app |
 
 <details>
 <summary><b>Audio</b>: measured tones and WAV files</summary>
@@ -349,6 +379,7 @@ name makes 5 checks fail.
 - The browser lists at most 64 entries per directory, and does not copy or
   rename folders; the viewer does not wrap lines.
 - One sound at a time; a WAV file is read into memory whole (heap 128 MiB).
+- Apps: one per cell hart, so one at a time under QEMU's 4 harts (harts 0-2 are the kernel, a helper and the key hart); no sound from an app (its beeps go to the console speaker), no app windows larger than the 320x240 canvas.
 - Only the boot hart draws on the screen; output of the other harts reaches
   the serial port only (counted as "dropped" by `term`). No scrollback.
 - No Ctrl shortcuts, no keyboard LEDs; the font has no glyphs beyond

@@ -13,6 +13,7 @@
 #include "input.h"
 #include "desktop.h"
 #include "files.h"
+#include "apps.h"
 
 const char* const PRODUCT_NAME = "YesOS Desktop";
 
@@ -29,6 +30,7 @@ U0 product_init(U0) {
     desktop_init();
     desktop_shell_register();
     files_shell_register();
+    apps_init();
     input_init();
     input_shell_register();
 }
