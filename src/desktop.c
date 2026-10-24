@@ -31,9 +31,21 @@ Window* desktop_window(U32 id) {
 
 static Window* top(U0) { return s_nz ? &s_win[s_z[s_nz - 1]] : NULL; }
 
+// The highest window not minimised.
+static Window* top_shown(U0) {
+    for (U32 i = s_nz; i-- > 0;) if (!s_win[s_z[i]].minimized) return &s_win[s_z[i]];
+    return NULL;
+}
+
+// The screen above the task bar: where windows live.
+static I32 usable_h(U0) {
+    DisplayState* d = display_state();
+    return d->height > TASKBAR_H ? (I32)(d->height - TASKBAR_H) : (I32)d->height;
+}
+
 static U0 clamp(const Window* w, I32* x, I32* y) {
     DisplayState* d = display_state();
-    I32 maxx = (I32)d->width - (I32)w->w, maxy = (I32)d->height - (I32)w->h;
+    I32 maxx = (I32)d->width - (I32)w->w, maxy = usable_h() - (I32)w->h;
     if (*x > maxx) *x = maxx;
     if (*y > maxy) *y = maxy;
     if (*x < 0) *x = 0;
@@ -44,8 +56,9 @@ static U0 clamp(const Window* w, I32* x, I32* y) {
 static U0 fit(U32* cols, U32* rows) {
     DisplayState* d = display_state();
     U32 fc = d->width > 2 * WIN_BORDER + 32 ? (d->width - 2 * WIN_BORDER - 32) / FONT_WIDTH : 1;
-    U32 fr = d->height > 2 * WIN_BORDER + WIN_TITLE_H + 32
-           ? (d->height - 2 * WIN_BORDER - WIN_TITLE_H - 32) / FONT_HEIGHT : 1;
+    U32 uh = (U32)usable_h();
+    U32 fr = uh > 2 * WIN_BORDER + WIN_TITLE_H + 32
+           ? (uh - 2 * WIN_BORDER - WIN_TITLE_H - 32) / FONT_HEIGHT : 1;
     if (*cols > fc) *cols = fc;
     if (*rows > fr) *rows = fr;
     if (*cols == 0) *cols = 1;
@@ -61,6 +74,62 @@ static U0 set_size(Window* w, U32 cols, U32 rows) {
 
 static U32 close_x(const Window* w) { return w->w - WIN_BORDER - WIN_CLOSE_SIZE - 3; }   // relative to the window
 static U32 close_y(U0) { return WIN_BORDER + 3; }
+static U32 min_x(const Window* w) {                // the minimise box, left of the close box
+    return w->closable ? close_x(w) - WIN_CLOSE_SIZE - 4 : w->w - WIN_BORDER - WIN_CLOSE_SIZE - 3;
+}
+
+// ---- the task bar ------------------------------------------------------------------
+
+// Windows in the order they were opened (their ids).
+static U32 by_id(Window** out) {
+    U32 n = 0;
+    for (U32 i = 0; i < WIN_MAX; i++) if (s_win[i].used) out[n++] = &s_win[i];
+    for (U32 i = 1; i < n; i++)
+        for (U32 j = i; j > 0 && out[j - 1]->id > out[j]->id; j--) { Window* t = out[j]; out[j] = out[j - 1]; out[j - 1] = t; }
+    return n;
+}
+
+static I32 task_btn_w(U32 n) {
+    DisplayState* d = display_state();
+    I32 bw = n ? ((I32)d->width - TASK_GAP) / (I32)n - TASK_GAP : TASK_BTN_W;
+    return bw < TASK_BTN_W ? bw : TASK_BTN_W;
+}
+
+// The task bar on view v, whose (0, 0) is the screen's (rx, ry).
+static U0 draw_taskbar(Surface* v, I32 rx, I32 ry) {
+    DisplayState* d = display_state();
+    I32 ty = usable_h() - ry;
+    if (ty >= v->h || ty + TASKBAR_H <= 0) return;
+    surf_fill(v, -rx, ty, (I32)d->width, TASKBAR_H, TASKBAR_BG);
+    Window* list[WIN_MAX];
+    U32 n = by_id(list);
+    I32 bw = task_btn_w(n);
+    Window* front = top_shown();
+    for (U32 k = 0; k < n; k++) {
+        Window* w = list[k];
+        I32 bx = TASK_GAP + (I32)k * (bw + TASK_GAP) - rx, by = ty + (TASKBAR_H - TASK_BTN_H) / 2;
+        Bool on = !w->minimized && w == front && w->id == g.focus;
+        surf_fill(v, bx, by, bw, TASK_BTN_H, w->minimized ? TASK_MIN_BG : on ? TASK_ON_BG : TASK_BG);
+        const char* t = w->title;
+        I32 tx = bx + 4;
+        for (I32 left = (bw - 8) / FONT_WIDTH; left > 0 && *t; left--, tx += FONT_WIDTH)
+            surf_glyph(v, tx, by + (TASK_BTN_H - FONT_HEIGHT) / 2, font_utf8_next(&t),
+                       w->minimized ? TASK_MIN_TEXT : TASK_TEXT, 0, FALSE);
+    }
+}
+
+static Window* task_at(I32 x, I32 y) {
+    if (y < usable_h()) return NULL;
+    Window* list[WIN_MAX];
+    U32 n = by_id(list);
+    I32 bw = task_btn_w(n), by = usable_h() + (TASKBAR_H - TASK_BTN_H) / 2;
+    if (y < by || y >= by + TASK_BTN_H) return NULL;
+    for (U32 k = 0; k < n; k++) {
+        I32 bx = TASK_GAP + (I32)k * (bw + TASK_GAP);
+        if (x >= bx && x < bx + bw) return list[k];
+    }
+    return NULL;
+}
 
 // ---- composing -----------------------------------------------------------------
 
@@ -75,12 +144,17 @@ static U0 draw_window(Surface* v, const Window* w, I32 rx, I32 ry) {
     surf_fill(v, X + W - WIN_BORDER, Y + WIN_BORDER, WIN_BORDER, H - 2 * WIN_BORDER, WIN_BORDER_RGB);
     surf_fill(v, X + WIN_BORDER, Y + WIN_BORDER, W - 2 * WIN_BORDER, WIN_TITLE_H,
               focused ? WIN_TITLE_RGB : WIN_TITLE_OFF_RGB);
-    // The title: as many whole characters as fit before the close box.
-    I32 room = W - 2 * WIN_BORDER - 6 - (w->closable ? WIN_CLOSE_SIZE + 6 : 6);
+    // The title: as many whole characters as fit before the boxes.
+    I32 room = W - 2 * WIN_BORDER - 6 - (w->closable ? WIN_CLOSE_SIZE + 6 : 6) - (WIN_CLOSE_SIZE + 4);
     const char* t = w->title;
     I32 tx = X + WIN_BORDER + 6, ty = Y + WIN_BORDER + (WIN_TITLE_H - FONT_HEIGHT) / 2;
     for (I32 n = room / FONT_WIDTH; n > 0 && *t; n--, tx += FONT_WIDTH)
         surf_glyph(v, tx, ty, font_utf8_next(&t), focused ? WIN_TITLE_TEXT : WIN_TITLE_OFF_TEXT, 0, FALSE);
+    {                                               // the minimise box: a white bar near its bottom
+        I32 mx = X + (I32)min_x(w), my = Y + (I32)close_y();
+        surf_fill(v, mx, my, WIN_CLOSE_SIZE, WIN_CLOSE_SIZE, WIN_MIN_RGB);
+        surf_fill(v, mx + 3, my + 9, 8, 2, 0xFFFFFF);
+    }
     if (w->closable) {
         I32 bx = X + (I32)close_x(w), by = Y + (I32)close_y();
         surf_fill(v, bx, by, WIN_CLOSE_SIZE, WIN_CLOSE_SIZE, WIN_CLOSE_RGB);
@@ -107,13 +181,15 @@ static U0 compose(I32 x, I32 y, I32 w, I32 h) {
     if (y < 0) y = 0;
     display_begin();
     surf_fill(&v, 0, 0, v.w, v.h, DESKTOP_BG);
-    for (U32 i = 0; i < s_nz; i++) draw_window(&v, &s_win[s_z[i]], x, y);
+    for (U32 i = 0; i < s_nz; i++) if (!s_win[s_z[i]].minimized) draw_window(&v, &s_win[s_z[i]], x, y);
+    draw_taskbar(&v, x, y);
     display_end();
     g.composed_px += (U64)v.w * v.h;
 }
 
 static U0 compose_window(const Window* w) { compose(w->x, w->y, (I32)w->w, (I32)w->h); }
 static U0 compose_title(const Window* w) { compose(w->x, w->y, (I32)w->w, WIN_BORDER + WIN_TITLE_H); }
+static U0 compose_taskbar(U0) { compose(0, usable_h(), (I32)display_state()->width, TASKBAR_H); }
 
 // A window's contents changed: show that part, under whatever covers it.
 static U0 content_damage(Surface* s, I32 x, I32 y, I32 w, I32 h) {
@@ -186,7 +262,11 @@ U0 desktop_show(Window* w) {
 U0 desktop_set_title(Window* w, const char* title) {
     StrNCpy(w->title, title, WIN_TITLE_MAX);
     w->title[WIN_TITLE_MAX - 1] = '\0';
-    if (w->used) compose_title(w);
+    if (!w->used) return;
+    display_begin();
+    compose_title(w);
+    compose_taskbar();                              // its button shows the title too
+    display_end();
 }
 
 Bool desktop_key(U32 key) {
@@ -198,14 +278,43 @@ Bool desktop_key(U32 key) {
 U0 desktop_front(U32 id) {
     Window* w = desktop_window(id);
     if (!w) return;
+    w->minimized = FALSE;
     U32 k = (U32)(w - s_win), at = 0;
     while (s_z[at] != k) at++;
     for (; at + 1 < s_nz; at++) s_z[at] = s_z[at + 1];
     s_z[s_nz - 1] = k;
     Window* old = desktop_window(g.focus);
     g.focus = id;
+    display_begin();
     if (old && old != w) compose_title(old);
     compose_window(w);
+    compose_taskbar();
+    display_end();
+}
+
+Bool desktop_minimize(U32 id) {
+    Window* w = desktop_window(id);
+    if (!w || !g.on) return FALSE;
+    if (w->minimized) return TRUE;
+    w->minimized = TRUE;
+    if ((g.dragging || g.resizing) && g.drag_id == id) g.dragging = g.resizing = FALSE;
+    display_begin();
+    if (g.focus == id) {                            // the focus goes to the window now on top
+        Window* t = top_shown();
+        g.focus = t ? t->id : 0;
+        if (t) compose_title(t);
+    }
+    compose_window(w);
+    compose_taskbar();
+    display_end();
+    return TRUE;
+}
+
+Bool desktop_restore(U32 id) {
+    Window* w = desktop_window(id);
+    if (!w || !g.on) return FALSE;
+    desktop_front(id);
+    return TRUE;
 }
 
 U0 desktop_move(U32 id, I32 x, I32 y) {
@@ -267,11 +376,13 @@ Bool desktop_close(U32 id) {
     Free(w->content.px);
     MemSet(w, 0, sizeof(*w));
     display_begin();
-    if (g.focus == id && top()) {
-        g.focus = top()->id;
-        compose_title(top());
+    if (g.focus == id) {
+        Window* t = top_shown();
+        g.focus = t ? t->id : 0;
+        if (t) compose_title(t);
     }
     compose(ox, oy, ow, oh);
+    compose_taskbar();
     display_end();
     return TRUE;
 }
@@ -330,6 +441,7 @@ U0 desktop_init(U0) {
 static Window* window_at(I32 x, I32 y) {
     for (U32 i = s_nz; i-- > 0;) {
         Window* w = &s_win[s_z[i]];
+        if (w->minimized) continue;
         if (x >= w->x && y >= w->y && x < w->x + (I32)w->w && y < w->y + (I32)w->h) return w;
     }
     return NULL;
@@ -340,6 +452,14 @@ U0 desktop_pointer(I32 x, I32 y, U32 buttons) {
     s_last_buttons = buttons;
     if (!g.on) return;
     if (left && !was) {
+        if (y >= usable_h()) {                      // the task bar
+            Window* t = task_at(x, y);
+            if (!t) return;
+            if (t->minimized) desktop_restore(t->id);
+            else if (t == top_shown() && g.focus == t->id) desktop_minimize(t->id);
+            else desktop_front(t->id);
+            return;
+        }
         Window* w = window_at(x, y);
         if (!w) return;
         if (w != top() || g.focus != w->id) desktop_front(w->id);
@@ -347,6 +467,9 @@ U0 desktop_pointer(I32 x, I32 y, U32 buttons) {
         if (w->closable && rx >= (I32)close_x(w) && rx < (I32)close_x(w) + WIN_CLOSE_SIZE &&
             ry >= (I32)close_y() && ry < (I32)close_y() + WIN_CLOSE_SIZE) {
             desktop_close(w->id);
+        } else if (rx >= (I32)min_x(w) && rx < (I32)min_x(w) + WIN_CLOSE_SIZE &&
+                   ry >= (I32)close_y() && ry < (I32)close_y() + WIN_CLOSE_SIZE) {
+            desktop_minimize(w->id);
         } else if (w->resizable && rx >= (I32)w->w - WIN_BORDER - WIN_GRIP && rx < (I32)w->w - WIN_BORDER &&
                    ry >= (I32)w->h - WIN_BORDER - WIN_GRIP && ry < (I32)w->h - WIN_BORDER) {
             // The grip: the pointer's offset from the bottom-right corner is kept.
@@ -414,9 +537,9 @@ static U32 parse_hex(const char* p) {
 static U0 list_windows(U0) {
     for (U32 i = s_nz; i-- > 0;) {
         const Window* w = &s_win[s_z[i]];
-        kprintf("  %u: \"%s\" at %d,%d, %ux%u pixels, %ux%u characters%s%s\n", (U64)w->id, w->title,
+        kprintf("  %u: \"%s\" at %d,%d, %ux%u pixels, %ux%u characters%s%s%s\n", (U64)w->id, w->title,
                 (I64)w->x, (I64)w->y, (U64)w->w, (U64)w->h, (U64)w->cols, (U64)w->rows,
-                w->id == g.focus ? ", focused" : "", i == s_nz - 1 ? ", top" : "");
+                w->id == g.focus ? ", focused" : "", i == s_nz - 1 ? ", top" : "", w->minimized ? ", minimized" : "");
     }
 }
 
@@ -470,6 +593,12 @@ static Bool window_run(const char* cmd) {
         I32 y = (I32)shell_parse_uint(next_word(p));
         desktop_move(w->id, x, y);
         kprintf("[WINDOW] %u at %d,%d\n", (U64)w->id, (I64)w->x, (I64)w->y);
+    } else if (shell_is_prefix("window min ", cmd)) {
+        Window* w = window_arg(cmd + 11);
+        if (w && desktop_minimize(w->id)) kprintf("[WINDOW] %u minimized\n", (U64)w->id);
+    } else if (shell_is_prefix("window restore ", cmd)) {
+        Window* w = window_arg(cmd + 15);
+        if (w && desktop_restore(w->id)) kprintf("[WINDOW] %u restored\n", (U64)w->id);
     } else if (shell_is_prefix("window size ", cmd)) {
         const char* p = cmd + 12;
         Window* w = window_arg(p);
@@ -486,7 +615,8 @@ static Bool window_run(const char* cmd) {
         else kprintf("[WINDOW] %u closed\n", (U64)id);
     } else {
         kprintf("usage: window [list] | window new <cols> <rows> <title> | window text <id> <col> <row> <rrggbb> <text>\n"
-                "       window front <id> | window move <id> <x> <y> | window size <id> <cols> <rows> | window close <id>\n");
+                "       window front <id> | window move <id> <x> <y> | window size <id> <cols> <rows> | window close <id>\n"
+                "       window min <id> | window restore <id>\n");
     }
     return TRUE;
 }
@@ -557,6 +687,7 @@ static U0 desktop_help(U0) {
     kprintf("    desktop [status]   desktop on   desktop off   desktop move <x> <y>\n");
     kprintf("    window [list]   window new <cols> <rows> <title>   window text <id> <col> <row> <rrggbb> <text>\n");
     kprintf("    window front <id>   window move <id> <x> <y>   window size <id> <cols> <rows>   window close <id>\n");
+    kprintf("    window min <id>   window restore <id>   (or the task bar along the bottom)\n");
 }
 
 static const ShellExtension s_desktop_shell = { desktop_run, desktop_help, NULL, NULL };

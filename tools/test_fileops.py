@@ -32,6 +32,12 @@ def check(cond, label):
         failures.append(label)
 
 
+def compare(got, want, label):
+    # here, not test_files.compare: that one records failures in test_files' list
+    bad = int((got != want).any(axis=2).sum()) if got.shape == want.shape else -1
+    check(bad == 0, f"{label}: {bad} pixel(s) differ" if bad >= 0 else f"{label}: screenshot of another size")
+
+
 def state(vm):
     head, entries = tf.listing(vm)
     return (head.group(2) if head else None, head.group(5) if head else None,
@@ -92,7 +98,7 @@ def main():
         # The console's text is taken from the screenshot itself: test_window
         # checks it; here the browser and the frames are under test.
         con.content = img[40 + tw.B + tw.T:40 + tw.B + tw.T + tw.ROWS * 16, 40 + tw.B:40 + tw.B + tw.COLS * 8].copy()
-        tf.compare(img, tw.compose(W, H, [con, br], 1, s.ptr), "F5: 'Copy a.txt to: b.txt_' in the status line")
+        compare(img, tw.compose(W, H, [con, br], 1, s.ptr), "F5: 'Copy a.txt to: b.txt_' in the status line")
         vm.send("term on", 1)
         vm.tap("ret")
         time.sleep(0.5)

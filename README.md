@@ -35,7 +35,7 @@ own tests.
 
 | What | Source |
 |---|---|
-| **Desktop**: overlapping windows with their own contents off the screen, composed only where something changed; drag, raise, resize, close | `src/desktop.c`, `src/surface.c` |
+| **Desktop**: overlapping windows with their own contents off the screen, composed only where something changed; drag, raise, resize, minimise, close; a task bar | `src/desktop.c`, `src/surface.c` |
 | **File browser** on the RedSea disk: open, play, view; copy, rename, delete, new folder | `src/files.c` |
 | **Text viewer**: UTF-8, tabs, scrolling | `src/files.c` |
 | **Apps in windows**: HolyQ programs run in an isolated PMP cell, each in its own window, with keys and pointer through `input()` | `src/apps.c` |
@@ -88,6 +88,13 @@ is measured today: see the
   rows that end with the cursor's (and its size across mode changes), the
   browser and the viewer show as many lines as now fit, a plain window
   keeps its text top-left. An app's window keeps the size of its canvas.
+- **Task bar and minimising**: along the bottom of the screen, a button
+  for every window, in the order they were opened, with its title: the
+  focused window's button lit, a minimised window's dimmed. The box left of
+  the close box (a white bar) minimises a window: it is no longer drawn and
+  takes no presses, and the focus goes to the window below. Its button
+  restores it in front; the focused window's own button minimises it;
+  another's brings it to the front. Windows never cover the task bar.
 - `desktop off` gives the whole screen to the console; `desktop on` puts
   the windows back. A mode change lays everything out again.
 - Pixel rows are filled and copied with **yesmath**, the core's optional
@@ -108,6 +115,7 @@ is measured today: see the
 Desktop     desktop [status]   desktop on   desktop off   desktop move <x> <y>   desktop bench
             window [list]   window new <cols> <rows> <title>   window text <id> <col> <row> <rrggbb> <text>
             window front <id>   window move <id> <x> <y>   window size <id> <cols> <rows>   window close <id>
+            window min <id>   window restore <id>
 ```
 
 ## File browser and viewer
@@ -286,6 +294,7 @@ the newer suites, faults were put in on purpose to see them caught (below).
 | `test_files.py` | 30 | browser and viewer, keys to the focused window, WAV files in the background |
 | `test_fileops.py` | 24 | copy, rename, delete, new folder, every refusal, fsck, the disk after a reboot |
 | `test_resize.py` | 13 | the console shrunk and grown (by its grip) with its text kept, a plain window grown and clamped, the browser re-laid out, an app's window fixed; pixel for pixel |
+| `test_taskbar.py` | 14 | the task bar's buttons; minimise from the title bar and from the bar, restore, focus to the window below, presses where a minimised window was; pixel for pixel |
 | `test_apps.py` | 16 | apps in cells: input events exactly, the window pixel for pixel, the console free while an app sleeps, close stops it, the PMP stops a hostile app |
 
 <details>
@@ -382,8 +391,9 @@ name makes 5 checks fail.
 
 - **Tested with QEMU's devices only**; a real board would need its own
   display, input and audio drivers.
-- Windows cannot be minimised (there is no task bar); the console is the
-  only window that takes text input as a command line.
+- The console is the only window that takes text input as a command line;
+  task bar buttons get narrower as windows open (8 windows at 1024x768:
+  123 pixels, 14 characters of title each).
 - The browser lists at most 64 entries per directory, and does not copy or
   rename folders; the viewer does not wrap lines.
 - One sound at a time; a WAV file is read into memory whole (heap 128 MiB).

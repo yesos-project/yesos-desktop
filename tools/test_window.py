@@ -34,6 +34,35 @@ B, T = 2, 20
 COLS, ROWS = 100, 40
 TITLE = "YesOS Console"
 TITLE_OFF_BG, TITLE_OFF_FG, CLOSE_RGB, PAPER, CLOSE = 0x5B6878, 0xC8CCD0, 0xC04040, 0xF4F1E8, 14
+MIN_RGB, TASKBAR_H, TASKBAR_BG, TASK_BTN_W, TASK_BTN_H, TASK_GAP = 0x6A7A8A, 24, 0x14283C, 150, 20, 4
+TASK_ON_BG, TASK_BG, TASK_MIN_BG, TASK_TEXT, TASK_MIN_TEXT = 0x2B4C7E, 0x3A4A5C, 0x24303C, 0xFFFFFF, 0x8899AA
+
+
+def min_box(img, X, Y, W_, closable):
+    """The minimise box: left of the close box (where the close box would be without one)."""
+    mx = X + W_ - B - CLOSE - 3 - ((CLOSE + 4) if closable else 0)
+    my = Y + B + 3
+    img[my:my + CLOSE, mx:mx + CLOSE] = ti.rgb(MIN_RGB)
+    img[my + 9:my + 11, mx + 3:mx + 11] = 255
+
+
+def taskbar(img, wins, focus):
+    """desktop.c draw_taskbar: a button per window in id order."""
+    h, w = img.shape[:2]
+    uh = h - TASKBAR_H
+    img[uh:h, :] = ti.rgb(TASKBAR_BG)
+    shown = [x for x in wins if not getattr(x, "minimized", False)]
+    front = shown[-1] if shown else None
+    order = sorted(wins, key=lambda x: x.id)
+    bw = min(TASK_BTN_W, (w - TASK_GAP) // len(order) - TASK_GAP) if order else TASK_BTN_W
+    by = uh + (TASKBAR_H - TASK_BTN_H) // 2
+    for k, win in enumerate(order):
+        bx = TASK_GAP + k * (bw + TASK_GAP)
+        mini = getattr(win, "minimized", False)
+        on = not mini and win is front and win.id == focus
+        img[by:by + TASK_BTN_H, bx:bx + bw] = ti.rgb(TASK_MIN_BG if mini else TASK_ON_BG if on else TASK_BG)
+        for i, ch in enumerate(win.title[:(bw - 8) // 8]):
+            put_glyph(img, bx + 4 + 8 * i, by + 2, ord(ch), TASK_MIN_TEXT if mini else TASK_TEXT)
 
 
 def check(cond, label):
@@ -62,6 +91,7 @@ def desktop(w, h, wx, wy, cols, rows, client, ptr):
     img[wy:wy + wh, wx:wx + ww] = ti.rgb(BORDER)
     img[wy + B:wy + B + T, wx + B:wx + ww - B] = ti.rgb(TITLE_BG)
     x = wx + B + 6
+    min_box(img, wx, wy, ww, False)
     for ch in TITLE:
         g = ti.glyph(ord(ch))
         for r in range(16):
@@ -71,6 +101,10 @@ def desktop(w, h, wx, wy, cols, rows, client, ptr):
         x += 8
     img[wy + B + T:wy + B + T + rows * 16, wx + B:wx + B + cols * 8] = client
     grip(img, wx, wy, ww, wh)
+
+    class _Con:
+        id, title, minimized = 0, TITLE, False
+    taskbar(img, [_Con()], 0)
     ti.draw_arrow(img, *ptr)
     return img
 
@@ -127,6 +161,7 @@ class Win:
     def __init__(self, wid, x, y, cols, rows, title, closable=True, resizable=True):
         self.id, self.x, self.y, self.cols, self.rows, self.title = wid, x, y, cols, rows, title
         self.closable, self.resizable = closable, resizable
+        self.minimized = False
         self.w, self.h = 2 * B + cols * 8, 2 * B + T + rows * 16
         self.content = np.zeros((rows * 16, cols * 8, 3), np.uint8)
         self.content[:] = ti.rgb(PAPER)
@@ -156,13 +191,16 @@ def compose(w, h, wins, focus, ptr):
     img = np.zeros((h, w, 3), np.uint8)
     img[:] = ti.rgb(BG)
     for win in wins:
+        if win.minimized:
+            continue
         X, Y, W_, H_ = win.x, win.y, win.w, win.h
         on = win.id == focus
         img[Y:Y + H_, X:X + W_] = ti.rgb(BORDER)
         img[Y + B:Y + B + T, X + B:X + W_ - B] = ti.rgb(TITLE_BG if on else TITLE_OFF_BG)
-        room = W_ - 2 * B - 6 - (CLOSE + 6 if win.closable else 6)
+        room = W_ - 2 * B - 6 - (CLOSE + 6 if win.closable else 6) - (CLOSE + 4)
         for i, ch in enumerate(win.title[:room // 8]):
             put_glyph(img, X + B + 6 + 8 * i, Y + B + 2, ord(ch), TITLE_FG if on else TITLE_OFF_FG)
+        min_box(img, X, Y, W_, win.closable)
         if win.closable:
             bx, by = X + W_ - B - CLOSE - 3, Y + B + 3
             img[by:by + CLOSE, bx:bx + CLOSE] = ti.rgb(CLOSE_RGB)
@@ -172,6 +210,7 @@ def compose(w, h, wins, focus, ptr):
         img[Y + B + T:Y + B + T + win.rows * 16, X + B:X + B + win.cols * 8] = win.content
         if win.resizable:
             grip(img, X, Y, W_, H_)
+    taskbar(img, wins, focus)
     ti.draw_arrow(img, *ptr)
     return img
 
@@ -305,26 +344,27 @@ def main():
         compare(vm.screendump(shot), desktop(W, H, 40, 40, COLS, ROWS, s.client(), s.ptr),
                 "desktop, window frame, title and console")
 
-        # drag by the title bar: +150, +50
-        s.drag(300, 50, 450, 100)
+        # drag by the title bar: +150, +30 (the window is 664 high: y <= 80 keeps it above the task bar)
+        s.drag(300, 50, 450, 80)
         st = status(vm)
-        check(st is not None and st[:2] == (190, 90) and st[7] == 1,
-              f"dragged by the title bar to 190,90 ({st})")
+        check(st is not None and st[:2] == (190, 70) and st[7] == 1,
+              f"dragged by the title bar to 190,70 ({st})")
         s.clear_terminal()                                   # the status line above went into the window
-        compare(vm.screendump(shot), desktop(W, H, 190, 90, COLS, ROWS, s.client(), s.ptr),
+        compare(vm.screendump(shot), desktop(W, H, 190, 70, COLS, ROWS, s.client(), s.ptr),
                 "after the drag: window moved whole, background repainted")
 
         # a press in the text area or on the background does not drag
         s.drag(400, 400, 600, 500)
         s.drag(100, 700, 50, 600)
         st = status(vm)
-        check(st is not None and st[:2] == (190, 90) and st[7] == 1,
+        check(st is not None and st[:2] == (190, 70) and st[7] == 1,
               f"presses outside the title bar move nothing ({st})")
 
         # dragged far right and down: stops with the window whole on the screen
-        s.drag(260, 100, 1023, 767)
+        s.drag(260, 80, 1023, 767)
         st = status(vm)
-        check(st is not None and st[:2] == (W - ww, H - wh), f"clamped at {W - ww},{H - wh} ({st})")
+        check(st is not None and st[:2] == (W - ww, H - TASKBAR_H - wh),
+              f"clamped at {W - ww},{H - TASKBAR_H - wh}, above the task bar ({st})")
 
         # moved from the console, then typed into at the new place
         m = vm.send("desktop move 0 0", 1.5)
@@ -364,8 +404,8 @@ def main():
         # a smaller mode: the console shrinks to fit, the window stays whole
         vm.send("display mode 800 600", 2)
         st = status(vm)
-        cols, rows = (800 - 2 * B - 32) // 8, (600 - 2 * B - T - 32) // 16
-        check(st is not None and st[4:6] == (cols, rows) and st[0] + st[2] <= 800 and st[1] + st[3] <= 600,
+        cols, rows = (800 - 2 * B - 32) // 8, (600 - TASKBAR_H - 2 * B - T - 32) // 16
+        check(st is not None and st[4:6] == (cols, rows) and st[0] + st[2] <= 800 and st[1] + st[3] <= 600 - TASKBAR_H,
               f"800x600: console {cols}x{rows}, window on the screen ({st})")
         check("FATAL" not in vm.output() and "RISC-V EXCEPTION" not in vm.output(), "no kernel faults")
     finally:

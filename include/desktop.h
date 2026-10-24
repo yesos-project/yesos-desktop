@@ -16,7 +16,11 @@
 // console. A resizable window has a grip in the bottom-right corner of its
 // contents: dragging it (or `window size`) changes its size in whole
 // characters; the pixels that still fit are kept and its program re-lays
-// itself out (on_resize).
+// itself out (on_resize). The box left of the close box minimises a window;
+// the task bar along the bottom of the screen has a button for every window
+// (in the order they were opened): a press restores a minimised window,
+// minimises the focused one, or brings another to the front. Windows never
+// cover the task bar.
 
 #define DESKTOP_BG          0x1F3B57
 #define WIN_BORDER          2
@@ -37,6 +41,17 @@
 #define WIN_X0              40              // the console's first position
 #define WIN_Y0              40
 #define WIN_GRIP            12              // the resize grip: the contents' last 12 x 12 pixels
+#define WIN_MIN_RGB         0x6A7A8A        // the minimise box (a white bar in it)
+#define TASKBAR_H           24
+#define TASKBAR_BG          0x14283C
+#define TASK_BTN_W          150             // at most; narrower when many windows are open
+#define TASK_BTN_H          20
+#define TASK_GAP            4
+#define TASK_ON_BG          0x2B4C7E        // the focused window's button
+#define TASK_BG             0x3A4A5C
+#define TASK_MIN_BG         0x24303C        // a minimised window's button
+#define TASK_TEXT           0xFFFFFF
+#define TASK_MIN_TEXT       0x8899AA
 #define WIN_MIN_COLS        16
 #define WIN_MIN_ROWS        3
 
@@ -68,6 +83,7 @@ struct Window {
     U32     cols, rows;                     // text area in characters
     Bool    closable;
     Bool    resizable;
+    Bool    minimized;                      // not drawn, no presses; its task bar button restores it
     U32     paper;                          // colour of contents newly exposed by a resize
     char    title[WIN_TITLE_MAX];
     Surface content;                        // cols*8 x rows*16 pixels, off the screen
@@ -102,6 +118,8 @@ Bool          desktop_close(U32 id);        // FALSE for the console or an unkno
 U0            desktop_front(U32 id);        // to the top, focused
 U0            desktop_move(U32 id, I32 x, I32 y);   // clamped so it stays on the screen
 Bool          desktop_resize(U32 id, U32 cols, U32 rows);   // FALSE if not resizable; sizes clamped
+Bool          desktop_minimize(U32 id);     // FALSE if there is no such window
+Bool          desktop_restore(U32 id);      // shown again, in front, focused
 U0            desktop_pointer(I32 x, I32 y, U32 buttons);   // from the input driver
 Bool          desktop_key(U32 key);         // TRUE if the focused window's program took it
 U0            desktop_show(Window* w);      // its contents were redrawn: compose them
