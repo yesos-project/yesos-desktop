@@ -38,7 +38,7 @@ own tests.
 | **Desktop**: overlapping windows with their own contents off the screen, composed only where something changed; drag, raise, close | `src/desktop.c`, `src/surface.c` |
 | **File browser** on the RedSea disk: open, play, view; copy, rename, delete, new folder | `src/files.c` |
 | **Text viewer**: UTF-8, tabs, scrolling | `src/files.c` |
-| **HD Audio**: tones, WAV files bit for bit, playback in the background | `src/hda.c`, `src/wav.c`, `src/audio_shell.c` |
+| **HD Audio**: tones, WAV files bit for bit, other rates resampled to the codec's, playback in the background | `src/hda.c`, `src/wav.c`, `src/audio_shell.c` |
 | **Keyboard and tablet** (virtio): US and Spanish layouts with dead keys, a pointer | `src/input.c` |
 | **Console on the screen**: in its window or the whole screen, with line editing and history | `src/terminal.c` |
 | **Framebuffer** (bochs-display) and the core's 8x16 font, Latin-1 and € | `src/display.c` |
@@ -204,10 +204,18 @@ Display     display [status]   display test   display clear [rrggbb]   display m
   replayed.
 - **Tone generator:** a 32-bit phase accumulator reading a 1024-point Q15
   sine table (`tools/gen_sine_q15.py`). Integer only.
-- **WAV files from RedSea**: 16-bit PCM, mono or stereo, at the file's own
-  rate (no resampling: the samples reach the codec unchanged). Every chunk
-  size is checked against the file size; what cannot be played is refused
-  with a message.
+- **WAV files from RedSea**: 16-bit PCM, mono or stereo. At a rate the
+  codec has, the samples reach it unchanged. At one it lacks (8 or 11.025
+  kHz, 24 kHz, 12 345 Hz...) they are **resampled** to 48 kHz, or above 48
+  kHz to the next rate up the codec has, with yesmath's 8-tap windowed sinc
+  (`ym_resample_sinc8`, 256 phases, integer only), one channel at a time.
+  Measured (`test_audio.py`, recorded at 48 kHz): an 11 025 Hz mono file and
+  a 24 000 Hz stereo one come out bit for bit as the same resampler computes
+  on the host; their tones at 1000.00 / 1000.01 / 3000.01 Hz, SINAD 57.5,
+  62.5 and 54.5 dB. Only upwards: a file above every rate the codec has
+  (192 kHz in QEMU) is refused, since going down needs a lower cut-off.
+  Every chunk size is checked against the file size; what cannot be played
+  is refused with a message.
 - **In the background** (`audio start`, and the file browser): the main loop
   keeps the ring filled (it runs every millisecond), so the desktop keeps
   working while it plays. One sound at a time. If the main loop is held up
@@ -235,7 +243,7 @@ the newer suites, faults were put in on purpose to see them caught (below).
 | Suite | Checks | What it covers |
 |---|---:|---|
 | `test_desktop.py` | 18 | boot with the PMP proven, the console, nothing on the network, a file across a reboot, UTF-8 input, fsck, yesmath's self-check |
-| `test_audio.py` | 38 | tones (duration, frequency, level, SINAD), WAV files bit for bit, bad files refused |
+| `test_audio.py` | 48 | tones (duration, frequency, level, SINAD), WAV files bit for bit, other rates resampled (bit for bit against the host, SINAD), bad files refused |
 | `test_display.py` | 23 | modes, test pattern, text in four colours, clipping, no display |
 | `test_input.py` | 35 | both layouts exactly, editing keys, the layout across a reboot, pointer, clicks, wheel, the console on the screen |
 | `test_window.py` | 37 | one and several windows: drags, raise, focus, close, a covered console, at most 8; the screen after `desktop bench` |
